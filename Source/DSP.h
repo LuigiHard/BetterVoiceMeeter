@@ -45,6 +45,12 @@ struct Biquad
         setNormalised ((1 - c) / 2, 1 - c, (1 - c) / 2, 1 + a, -2 * c, 1 - a);
     }
 
+    void setNotch (double sr, double f, double q)
+    {
+        const double w = juce::MathConstants<double>::twoPi * f / sr, c = std::cos (w), a = std::sin (w) / (2 * q);
+        setNormalised (1, -2 * c, 1, 1 + a, -2 * c, 1 - a);
+    }
+
     void setPeak (double sr, double f, double q, double gainDb)
     {
         const double A = std::pow (10.0, gainDb / 40), w = juce::MathConstants<double>::twoPi * f / sr;

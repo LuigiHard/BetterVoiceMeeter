@@ -111,6 +111,10 @@ struct StripParams : ParamGroup
         sourceL     = mk ("srcL", -1.0f, 63.0f, -1.0f);
         sourceR     = mk ("srcR", -1.0f, 63.0f, -1.0f);
         active      = mk ("active", 0, 1, 0);
+        declick     = mk ("declick", 0.0f, 1.0f, 0.0f);
+        hum         = mk ("hum", 0.0f, 2.0f, 0.0f);      // 0 off, 1 = 50 Hz, 2 = 60 Hz
+        dnAmount    = mk ("denoise", 0.0f, 1.0f, 0.0f);
+        dnLearn     = mk ("dnLearn", 0, 1, 0);
 
         for (int b = 0; b < kNumBuses; ++b)
             routes[(size_t) b] = mk (("bus" + juce::String (b)).toRawUTF8(), 0, 1, b == 0 ? 1.0f : 0.0f);
@@ -121,7 +125,8 @@ struct StripParams : ParamGroup
                            compKnee.get(), compMakeup.get(), compAuto.get(), eqOn.get(), eqLowFreq.get(),
                            eqLowGain.get(), eqMidFreq.get(), eqMidGain.get(), eqMidQ.get(), eqHighFreq.get(),
                            eqHighGain.get(), deessThresh.get(), drive.get(), sendReverb.get(), sendDelay.get(),
-                           stereo.get(), sourceL.get(), sourceR.get(), active.get() })
+                           stereo.get(), sourceL.get(), sourceR.get(), active.get(), declick.get(), hum.get(),
+                           dnAmount.get() })
             add (*ptr);
 
         for (auto& r : routes)
@@ -132,7 +137,8 @@ struct StripParams : ParamGroup
         gateThresh, gateRange, gateAttack, gateHold, gateRelease,
         compThresh, compRatio, compAttack, compRelease, compKnee, compMakeup, compAuto,
         eqOn, eqLowFreq, eqLowGain, eqMidFreq, eqMidGain, eqMidQ, eqHighFreq, eqHighGain,
-        deessThresh, drive, sendReverb, sendDelay, stereo, sourceL, sourceR, active;
+        deessThresh, drive, sendReverb, sendDelay, stereo, sourceL, sourceR, active,
+        declick, hum, dnAmount, dnLearn; // dnLearn is momentary UI state, not saved
     std::array<std::unique_ptr<Param>, kNumBuses> routes;
 
     // Not saved as a param: display name (message thread only).

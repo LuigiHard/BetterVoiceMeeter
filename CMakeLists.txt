@@ -27,6 +27,7 @@ target_sources(BetterVoiceMeeter PRIVATE
     Source/Main.cpp
     Source/Engine.cpp
     Source/ExternalBridge.cpp
+    Source/InsertChain.cpp
     Source/UI/MainComponent.cpp)
 
 target_include_directories(BetterVoiceMeeter PRIVATE Source)
@@ -34,6 +35,7 @@ target_include_directories(BetterVoiceMeeter PRIVATE Source)
 target_compile_definitions(BetterVoiceMeeter PRIVATE
     JUCE_ASIO=1
     JUCE_WASAPI=1
+    JUCE_PLUGINHOST_VST3=1
     JUCE_DIRECTSOUND=0
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
@@ -53,3 +55,19 @@ target_link_libraries(BetterVoiceMeeter
 if(MSVC)
     target_compile_options(BetterVoiceMeeter PRIVATE /fp:fast)
 endif()
+
+# Offline DSP checks: cmake --build build --config Release --target RepairTest
+juce_add_console_app(RepairTest PRODUCT_NAME "RepairTest")
+juce_generate_juce_header(RepairTest)
+target_sources(RepairTest PRIVATE Tests/RepairTest.cpp)
+target_compile_definitions(RepairTest PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
+target_link_libraries(RepairTest PRIVATE juce::juce_dsp juce::juce_audio_basics
+    PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+
+# Loads real VST3s through InsertChain: PluginSmokeTest <path.vst3> ...
+juce_add_console_app(PluginSmokeTest PRODUCT_NAME "PluginSmokeTest")
+juce_generate_juce_header(PluginSmokeTest)
+target_sources(PluginSmokeTest PRIVATE Tests/PluginSmokeTest.cpp Source/InsertChain.cpp)
+target_compile_definitions(PluginSmokeTest PRIVATE JUCE_PLUGINHOST_VST3=1 JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
+target_link_libraries(PluginSmokeTest PRIVATE juce::juce_audio_processors juce::juce_gui_basics
+    PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)

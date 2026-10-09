@@ -14,6 +14,14 @@ Requires a Focusrite interface with the Focusrite USB ASIO driver installed. Opt
   - **FX** button opens the full channel strip: trim, polarity, low-cut, drive/saturation, gate (threshold/range/attack/hold/release),
     3-band parametric EQ with a live curve, compressor (threshold/ratio/attack/release/knee/makeup/auto gain), de-esser,
     plus **presets**: Vocal, Podcast/Stream, Electric Guitar (DI), Acoustic Guitar, Bass (DI), Keys/Synth
+- **Noise repair** (channel editor → NOISE REPAIR), for a faulty cable, static, or ground hum:
+  - **De-crackle:** detects clicks, crackle, and short dropouts and patches over them (+0.7 ms)
+  - **Hum filter:** 50/60 Hz notch plus 4 harmonics (Brazil/US: 60 Hz)
+  - **Denoise:** spectral noise reduction that tracks the noise floor automatically, or press
+    **LEARN NOISE** for 2–3 s while only the static is audible for a precise profile (+5.3 ms while on).
+    Learned profiles are saved.
+- **VST3 plugin inserts:** 4 slots per input strip (pre-fader) and per bus (bus **FX** button).
+  Scan plugins under **Audio Setup → Scan / Manage VST3 Plugins**. Plugin state is saved with the mix.
 - **2 virtual input strips:** capture any Windows recording device through WASAPI
 - **FX returns:** Reverb and stereo ping-pong Delay, each with its own bus routing
 - **Master section**
@@ -31,6 +39,13 @@ cmake -S . -B build -G "Visual Studio 16 2019" -A x64
 cmake --build build --config Release
 ```
 Output: `build/BetterVoiceMeeter_artefacts/Release/BetterVoiceMeeter.exe`
+
+## Tests
+```
+cmake --build build --config Release --target RepairTest PluginSmokeTest
+build/RepairTest_artefacts/Release/RepairTest.exe
+build/PluginSmokeTest_artefacts/Release/PluginSmokeTest.exe "C:/Program Files/Common Files/VST3/<plugin>.vst3"
+```
 
 ## Notes
 - Preamp gain, 48V phantom power, INST, and AIR are analog settings on the interface. Set them with Focusrite Control 2; this app's **TRIM** is digital.

@@ -15,6 +15,9 @@ void Engine::StripState::resetDsp()
     comp.reset();
     deessEnv = 0;
     deessGain = 1;
+    declick.reset();
+    hum.reset();
+    denoise.reset();
 }
 
 Engine::Engine()
@@ -33,6 +36,11 @@ Engine::Engine()
     for (int i = 0; i < kNumFx; ++i)     fx[(size_t) i] = std::make_unique<FxParams> (i);
     for (auto& b : outBridges) b = std::make_unique<ExternalBridge> (ExternalBridge::Direction::output);
     for (auto& b : inBridges)  b = std::make_unique<ExternalBridge> (ExternalBridge::Direction::input);
+
+    juce::addDefaultFormatsToManager (formatManager);
+    if (auto pluginXml = juce::XmlDocument::parse (getDataDir().getChildFile ("plugins.xml")))
+        knownPlugins.recreateFromXml (*pluginXml);
+    knownPlugins.addChangeListener (this);
 
     stripBuf.setSize (2, maxBlock);
     busBuf.setSize (kNumBuses * 2, maxBlock);
@@ -116,6 +124,7 @@ Engine::~Engine()
     saveState();
     deviceManager.removeAudioCallback (this);
     deviceManager.removeChangeListener (this);
+    knownPlugins.removeChangeListener (this);
     for (auto& b : outBridges) b->close();
     for (auto& b : inBridges)  b->close();
     deviceManager.closeAudioDevice();
@@ -245,7 +254,16 @@ void Engine::handleAsyncUpdate()
     if (bridgeRate != sampleRate.load() || bridgeBlock != blockSize.load()
         || needsReopen (outBridges, outBridgeNames) || needsReopen (inBridges, inBridgeNames))
         reopenBridges();
-    if (onLayoutChanged) onLayoutChanged();
+
+    // Only rebuild the UI when the interface's channel layout actually changed.
+    auto layoutKey = getInputChannelNames().joinIntoString ("|") + "#" + getOutputChannelNames().joinIntoString ("|");
+    if (auto* d = deviceManager.getCurrentAudioDevice())
+        layoutKey += "#" + d->getName();
+    if (layoutKey != lastLayoutKey)
+    {
+        lastLayoutKey = layoutKey;
+        if (onLayoutChanged) onLayoutChanged();
+    }
 }
 
 // Make sure every input/output channel of the interface is active, so strips can use any of them.
@@ -270,8 +288,17 @@ void Engine::enableAllChannels()
     enforcingChannels = false;
 }
 
-void Engine::changeListenerCallback (juce::ChangeBroadcaster*)
+void Engine::changeListenerCallback (juce::ChangeBroadcaster* source)
 {
+    if (source == &knownPlugins)
+    {
+        if (auto xml = knownPlugins.createXml())
+        {
+            getDataDir().createDirectory();
+            xml->writeTo (getDataDir().getChildFile ("plugins.xml"));
+        }
+        return;
+    }
     enableAllChannels();
     triggerAsyncUpdate();
 }
@@ -309,6 +336,9 @@ void Engine::audioDeviceAboutToStart (juce::AudioIODevice* d)
         for (int c = 0; c < 2; ++c) { b.low[c].reset(); b.mid[c].reset(); b.high[c].reset(); }
     }
     for (auto& g : fxGain) g.reset (sr, 0.02);
+
+    for (auto& c : stripInserts) c.prepare (sr, d->getCurrentBufferSizeSamples());
+    for (auto& c : busInserts)   c.prepare (sr, d->getCurrentBufferSizeSamples());
 
     reverb.setSampleRate (sr);
     reverb.reset();
@@ -391,7 +421,26 @@ void Engine::processStrip (int s, StripState& st, float* l, float* r, int n, boo
     for (int i = 0; i < n; ++i)
     {
         const float tg = st.trim.getNextValue();
-        float xl = l[i] * tg, xr = r[i] * tg;
+        l[i] *= tg;
+        r[i] *= tg;
+    }
+
+    // Noise repair (bad cables etc.): de-crackle -> hum notch -> spectral denoise.
+    if (const float dc = p.declick->get(); dc > 0.001f)
+        st.declick.process (l, r, n, dc);
+    if (const int hum = (int) p.hum->get(); hum > 0)
+        st.hum.process (l, r, n, hum == 1 ? 50.0f : 60.0f, sr);
+    if (denoiseReset[(size_t) s].exchange (false))
+        st.denoise.clearProfile();
+    const float dn = p.dnAmount->get();
+    const bool learn = p.dnLearn->on();
+    if (dn > 0.001f || learn)
+        st.denoise.process (l, r, n, dn, learn);
+    denoiseStatus[(size_t) s].store (st.denoise.status.load());
+
+    for (int i = 0; i < n; ++i)
+    {
+        float xl = l[i], xr = r[i];
 
         if (hpfOn) { xl = st.hpf[0].process (xl); xr = st.hpf[1].process (xr); }
 
@@ -444,10 +493,17 @@ void Engine::processStrip (int s, StripState& st, float* l, float* r, int n, boo
             xr = (1.0f - drive) * xr + drive * std::tanh (driveK * xr) * driveNorm;
         }
 
-        const float fg = st.fader.getNextValue();
-        xl *= fg * st.panL.getNextValue();
-        xr *= fg * st.panR.getNextValue();
+        l[i] = xl;
+        r[i] = xr;
+    }
 
+    stripInserts[(size_t) s].process (l, r, n); // VST3 inserts, pre-fader
+
+    for (int i = 0; i < n; ++i)
+    {
+        const float fg = st.fader.getNextValue();
+        const float xl = l[i] * fg * st.panL.getNextValue();
+        const float xr = r[i] * fg * st.panR.getNextValue();
         l[i] = xl;
         r[i] = xr;
         outPeakL = juce::jmax (outPeakL, std::abs (xl));
@@ -600,6 +656,14 @@ void Engine::audioDeviceIOCallbackWithContext (const float* const* in, int numIn
                 xr = st.high[1].process (st.mid[1].process (st.low[1].process (xr)));
             }
             if (mono) { const float m = 0.5f * (xl + xr); xl = xr = m; }
+            bl[i] = xl; br[i] = xr;
+        }
+
+        busInserts[(size_t) b].process (bl, br, n);
+
+        for (int i = 0; i < n; ++i)
+        {
+            float xl = bl[i], xr = br[i];
             const float g = st.gain.getNextValue();
             xl *= g; xr *= g;
             if (lim)
@@ -633,10 +697,59 @@ void Engine::audioDeviceIOCallbackWithContext (const float* const* in, int numIn
 }
 
 //==============================================================================
+juce::File Engine::getDataDir()
+{
+    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("BetterVoiceMeeter");
+}
+
 juce::File Engine::getSettingsFile()
 {
-    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-        .getChildFile ("BetterVoiceMeeter").getChildFile ("settings.xml");
+    return getDataDir().getChildFile ("settings.xml");
+}
+
+juce::String Engine::loadPlugin (InsertChain& chain, int slot, const juce::PluginDescription& desc)
+{
+    juce::String err;
+    auto instance = formatManager.createPluginInstance (desc, sampleRate.load(), juce::jmax (blockSize.load(), 32), err);
+    if (instance == nullptr)
+        return err.isEmpty() ? "Could not load " + desc.name : err;
+    auto old = chain.swap (slot, std::move (instance));
+    if (old != nullptr && onPluginRemoved) onPluginRemoved (old.get());
+    return {};
+}
+
+void Engine::removePlugin (InsertChain& chain, int slot)
+{
+    auto old = chain.swap (slot, nullptr);
+    if (old != nullptr && onPluginRemoved) onPluginRemoved (old.get());
+}
+
+void Engine::restoreInserts (InsertChain& chain, const juce::XmlElement* xml)
+{
+    for (int i = 0; i < InsertChain::numSlots; ++i)
+        if (chain.get (i) != nullptr)
+            removePlugin (chain, i);
+    if (xml == nullptr)
+        return;
+
+    for (auto* e : xml->getChildWithTagNameIterator ("SLOT"))
+    {
+        const int idx = e->getIntAttribute ("index", -1);
+        juce::PluginDescription desc;
+        auto* d = e->getChildByName ("PLUGIN");
+        if (! juce::isPositiveAndBelow (idx, InsertChain::numSlots) || d == nullptr || ! desc.loadFromXml (*d))
+            continue;
+        const auto err = loadPlugin (chain, idx, desc);
+        if (err.isNotEmpty())
+        {
+            juce::Logger::writeToLog ("Plugin restore failed (" + desc.name + "): " + err);
+            continue;
+        }
+        juce::MemoryBlock state;
+        if (state.fromBase64Encoding (e->getStringAttribute ("state")))
+            chain.get (idx)->setStateInformation (state.getData(), (int) state.getSize());
+        chain.slot (idx).bypass = e->getBoolAttribute ("bypass");
+    }
 }
 
 std::unique_ptr<juce::XmlElement> Engine::createStateXml (bool includeDevice) const
@@ -646,13 +759,26 @@ std::unique_ptr<juce::XmlElement> Engine::createStateXml (bool includeDevice) co
         if (auto dev = deviceManager.createStateXml())
             xml->addChildElement (dev.release());
 
-    for (auto& s : strips)
+    for (int i = 0; i < kNumStrips; ++i)
     {
         auto* e = xml->createNewChildElement ("STRIP");
-        s->saveTo (*e);
-        e->setAttribute ("label", s->label);
+        strips[(size_t) i]->saveTo (*e);
+        e->setAttribute ("label", strips[(size_t) i]->label);
+        e->addChildElement (stripInserts[(size_t) i].toXml().release());
+        const auto profile = stripState[(size_t) i].denoise.getProfile();
+        if (! profile.empty())
+        {
+            juce::StringArray vals;
+            for (float v : profile) vals.add (juce::String (v, 8));
+            e->createNewChildElement ("DENOISE")->setAttribute ("profile", vals.joinIntoString (","));
+        }
     }
-    for (auto& b : buses) b->saveTo (*xml->createNewChildElement ("BUS"));
+    for (int b = 0; b < kNumBuses; ++b)
+    {
+        auto* e = xml->createNewChildElement ("BUS");
+        buses[(size_t) b]->saveTo (*e);
+        e->addChildElement (busInserts[(size_t) b].toXml().release());
+    }
     for (auto& f : fx)    f->saveTo (*xml->createNewChildElement ("FX"));
 
     auto* v = xml->createNewChildElement ("VIRTUAL");
@@ -673,11 +799,26 @@ void Engine::restoreStateXml (const juce::XmlElement& xml, bool includeDevice)
         if (i >= kNumStrips) break;
         strips[(size_t) i]->loadFrom (*e);
         strips[(size_t) i]->label = e->getStringAttribute ("label", strips[(size_t) i]->label);
+        strips[(size_t) i]->dnLearn->set (0.0f);
+        restoreInserts (stripInserts[(size_t) i], e->getChildByName ("INSERTS"));
+        if (auto* dn = e->getChildByName ("DENOISE"))
+        {
+            std::vector<float> prof;
+            for (auto& v : juce::StringArray::fromTokens (dn->getStringAttribute ("profile"), ",", ""))
+                prof.push_back (v.getFloatValue());
+            stripState[(size_t) i].denoise.setProfile (prof);
+        }
+        else
+            stripState[(size_t) i].denoise.clearProfile();
         ++i;
     }
     i = 0;
     for (auto* e : xml.getChildWithTagNameIterator ("BUS"))
-        if (i < kNumBuses) buses[(size_t) i++]->loadFrom (*e);
+        if (i < kNumBuses)
+        {
+            restoreInserts (busInserts[(size_t) i], e->getChildByName ("INSERTS"));
+            buses[(size_t) i++]->loadFrom (*e);
+        }
     i = 0;
     for (auto* e : xml.getChildWithTagNameIterator ("FX"))
         if (i < kNumFx) fx[(size_t) i++]->loadFrom (*e);

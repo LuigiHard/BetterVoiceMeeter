@@ -62,9 +62,11 @@ public:
         g.drawRoundedRectangle (r, 3.0f, 1.0f);
     }
 
-    juce::Font getTextButtonFont (juce::TextButton&, int h) override
+    juce::Font getTextButtonFont (juce::TextButton& b, int h) override
     {
-        return theme::font (juce::jmin (13.0f, h * 0.55f), true);
+        // Shrink short labels to fit narrow buttons instead of truncating them.
+        const float byWidth = (float) (b.getWidth() - 6) / juce::jmax (1, b.getButtonText().length()) * 1.25f;
+        return theme::font (juce::jmax (8.5f, juce::jmin (13.0f, h * 0.55f, byWidth)), true);
     }
 
     void drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos, float start, float end,

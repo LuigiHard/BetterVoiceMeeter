@@ -7,6 +7,7 @@ class StripComponent;
 class BusComponent;
 class FxReturnComponent;
 class DetailPanel;
+class PluginWindow;
 
 class MainComponent : public juce::Component, private juce::Timer
 {
@@ -21,6 +22,10 @@ public:
     void rebuild();
     void openDetail (int stripIndex);
     void closeDetail();
+
+    void openPluginEditor (juce::AudioPluginInstance*);
+    void closePluginEditor (juce::AudioProcessor*);
+    void openPluginManager();
 
 private:
     void timerCallback() override;
@@ -41,7 +46,9 @@ private:
     juce::OwnedArray<FxReturnComponent> fxComps;
     juce::OwnedArray<BusComponent> busComps;
     std::unique_ptr<DetailPanel> detail;
+    int detailStrip = -1;
     std::unique_ptr<juce::FileChooser> chooser;
+    juce::OwnedArray<PluginWindow> pluginWindows;
 
     juce::Rectangle<int> headerArea, masterArea, fxArea;
     juce::TooltipWindow tooltips { this };

@@ -108,6 +108,145 @@ std::unique_ptr<Knob> makeCompKnob (Param& p, juce::Colour c)
 } // namespace
 
 // =============================================================================================
+// Window hosting a plugin's own editor (or a generic one if it has none).
+class PluginWindow : public juce::DocumentWindow
+{
+public:
+    PluginWindow (juce::AudioProcessor& p, std::function<void (PluginWindow*)> onCloseFn)
+        : DocumentWindow (p.getName(), theme::bg, DocumentWindow::closeButton), processor (p), onClose (std::move (onCloseFn))
+    {
+        setUsingNativeTitleBar (true);
+        juce::AudioProcessorEditor* editor = p.hasEditor() ? p.createEditorAndMakeActive() : nullptr;
+        if (editor == nullptr)
+            editor = new juce::GenericAudioProcessorEditor (p);
+        setContentOwned (editor, true);
+        setResizable (editor->isResizable(), false);
+        centreWithSize (getWidth(), getHeight());
+        setVisible (true);
+    }
+
+    ~PluginWindow() override { clearContentComponent(); }
+
+    void closeButtonPressed() override { onClose (this); }
+
+    juce::AudioProcessor& processor;
+
+private:
+    std::function<void (PluginWindow*)> onClose;
+};
+
+// Four VST3 insert slots for one strip or bus.
+class InsertSlotsComponent : public juce::Component, private juce::Timer
+{
+public:
+    InsertSlotsComponent (Engine& e, InsertChain& c, MainComponent& mc, juce::Colour accentColour)
+        : engine (e), chain (c), main (mc), accent (accentColour)
+    {
+        for (int i = 0; i < InsertChain::numSlots; ++i)
+        {
+            auto& row = rows[(size_t) i];
+            row.name.onClick = [this, i] { showSlotMenu (i); };
+            row.edit.onClick = [this, i] { if (auto* p = chain.get (i)) main.openPluginEditor (p); };
+            row.bypass.setClickingTogglesState (true);
+            row.bypass.setColour (juce::TextButton::buttonOnColourId, theme::virt);
+            row.bypass.onClick = [this, i] { chain.slot (i).bypass = rows[(size_t) i].bypass.getToggleState(); };
+            row.remove.onClick = [this, i] { engine.removePlugin (chain, i); refresh(); };
+            row.edit.setTooltip ("Open plugin editor");
+            row.bypass.setTooltip ("Bypass");
+            row.remove.setTooltip ("Remove plugin");
+            for (auto* b : { &row.name, &row.edit, &row.bypass, &row.remove })
+                addAndMakeVisible (b);
+        }
+        refresh();
+        startTimerHz (4);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds();
+        const int h = juce::jmin (28, r.getHeight() / InsertChain::numSlots);
+        for (auto& row : rows)
+        {
+            auto line = r.removeFromTop (h).reduced (0, 2);
+            row.remove.setBounds (line.removeFromRight (26));
+            line.removeFromRight (3);
+            row.bypass.setBounds (line.removeFromRight (40));
+            line.removeFromRight (3);
+            row.edit.setBounds (line.removeFromRight (40));
+            line.removeFromRight (3);
+            row.name.setBounds (line);
+        }
+    }
+
+private:
+    struct Row { juce::TextButton name, edit { "EDIT" }, bypass { "BYP" }, remove { "X" }; };
+
+    void refresh()
+    {
+        for (int i = 0; i < InsertChain::numSlots; ++i)
+        {
+            auto& row = rows[(size_t) i];
+            auto* p = chain.get (i);
+            juce::String text = juce::String (i + 1) + ".  ";
+            if (p == nullptr)
+                text += "+ add plugin";
+            else
+            {
+                text += p->getName();
+                if (const int lat = p->getLatencySamples(); lat > 0)
+                    text += "  (+" + juce::String (1000.0 * lat / chain.getSampleRate(), 1) + " ms)";
+            }
+            row.name.setButtonText (text);
+            row.name.setColour (juce::TextButton::textColourOffId, p != nullptr ? accent : theme::dim);
+            row.edit.setEnabled (p != nullptr);
+            row.bypass.setEnabled (p != nullptr);
+            row.remove.setEnabled (p != nullptr);
+            row.bypass.setToggleState (p != nullptr && chain.slot (i).bypass.load(), juce::dontSendNotification);
+        }
+    }
+
+    void timerCallback() override { refresh(); }
+
+    void showSlotMenu (int i)
+    {
+        static constexpr int scanId = 1000000, removeId = 1000001;
+        const auto types = engine.knownPlugins.getTypes();
+        juce::PopupMenu m;
+        if (types.isEmpty())
+            m.addItem (-1, "No plugins found yet - scan first", false);
+        else
+            juce::KnownPluginList::addToMenu (m, types, juce::KnownPluginList::sortByManufacturer,
+                                              chain.get (i) != nullptr ? chain.get (i)->getPluginDescription().createIdentifierString()
+                                                                       : juce::String());
+        m.addSeparator();
+        m.addItem (scanId, "Scan / manage VST3 plugins...");
+        if (chain.get (i) != nullptr)
+            m.addItem (removeId, "Remove");
+
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&rows[(size_t) i].name),
+                         [this, i, types] (int result)
+                         {
+                             if (result == scanId) { main.openPluginManager(); return; }
+                             if (result == removeId) { engine.removePlugin (chain, i); refresh(); return; }
+                             const int idx = juce::KnownPluginList::getIndexChosenByMenu (types, result);
+                             if (idx < 0) return;
+                             const auto err = engine.loadPlugin (chain, i, types.getReference (idx));
+                             if (err.isNotEmpty())
+                                 juce::NativeMessageBox::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Plugin", err);
+                             else
+                                 main.openPluginEditor (chain.get (i));
+                             refresh();
+                         });
+    }
+
+    Engine& engine;
+    InsertChain& chain;
+    MainComponent& main;
+    juce::Colour accent;
+    std::array<Row, InsertChain::numSlots> rows;
+};
+
+// =============================================================================================
 class StripComponent : public juce::Component
 {
 public:
@@ -351,7 +490,7 @@ private:
 class BusComponent : public juce::Component
 {
 public:
-    BusComponent (Engine& e, int index) : engine (e), b (index), p (*e.buses[(size_t) index])
+    BusComponent (Engine& e, MainComponent& mc, int index) : engine (e), main (mc), b (index), p (*e.buses[(size_t) index])
     {
         accent = b < kNumHwBuses ? theme::busA : theme::busB;
         styleCaption (title, accent, 15.0f);
@@ -371,6 +510,15 @@ public:
             k->setFormatter ([] (float v) { return (v > 0 ? "+" : "") + juce::String (v, 1); });
             addAndMakeVisible (*k);
         }
+
+        fxBtn.setTooltip ("VST3 plugin inserts on this bus");
+        fxBtn.onClick = [this]
+        {
+            auto slots = std::make_unique<InsertSlotsComponent> (engine, engine.busInserts[(size_t) b], main, accent);
+            slots->setSize (340, 4 * 28);
+            juce::CallOutBox::launchAsynchronously (std::move (slots), fxBtn.getScreenBounds(), nullptr);
+        };
+        addAndMakeVisible (fxBtn);
 
         eq = std::make_unique<ParamToggle> (*p.eqOn, "EQ", accent);
         lim = std::make_unique<ParamToggle> (*p.limiter, "LIM", accent);
@@ -400,8 +548,10 @@ public:
         hi->setBounds (knobs);
         r.removeFromTop (2);
         auto row = r.removeFromTop (22);
-        eq->setBounds (row.removeFromLeft (row.getWidth() / 2).reduced (1));
-        lim->setBounds (row.reduced (1));
+        const int third = row.getWidth() / 3;
+        eq->setBounds (row.removeFromLeft (third).reduced (1));
+        lim->setBounds (row.removeFromLeft (third).reduced (1));
+        fxBtn.setBounds (row.reduced (1));
         row = r.removeFromBottom (22);
         mono->setBounds (row.removeFromLeft (row.getWidth() / 2).reduced (1));
         mute->setBounds (row.reduced (1));
@@ -465,11 +615,12 @@ private:
     }
 
     Engine& engine;
+    MainComponent& main;
     int b;
     BusParams& p;
     juce::Colour accent;
     juce::Label title;
-    juce::TextButton output;
+    juce::TextButton output, fxBtn { "FX" };
     std::unique_ptr<Knob> lo, mid, hi;
     std::unique_ptr<ParamToggle> eq, lim, mono, mute;
     std::unique_ptr<FaderMeter> fader;
@@ -553,11 +704,11 @@ private:
 
 // =============================================================================================
 // Full channel editor: trim, polarity, HPF, gate, 3-band EQ, de-esser, compressor, drive, sends.
-class DetailPanel : public juce::Component
+class DetailPanel : public juce::Component, private juce::Timer
 {
 public:
     DetailPanel (Engine& e, MainComponent& mc, int index)
-        : main (mc), s (index), p (*e.strips[(size_t) index]), meter (e.stripMeters[(size_t) index]),
+        : engine (e), main (mc), s (index), p (*e.strips[(size_t) index]), meter (e.stripMeters[(size_t) index]),
           inputMeter (e.stripInputMeters[(size_t) index]), curve (p, index < kNumHwStrips ? theme::hw : theme::virt)
     {
         accent = s < kNumHwStrips ? theme::hw : theme::virt;
@@ -649,6 +800,56 @@ public:
         });
         outMeter = std::make_unique<LevelMeter> (meter);
         addAndMakeVisible (*outMeter);
+
+        // NOISE REPAIR
+        declick = knob (*p.declick, "DE-CRACKLE", [] (float v) { return v < 0.005f ? juce::String ("OFF") : juce::String ((int) (v * 100)) + "%"; });
+        denoise = knob (*p.dnAmount, "DENOISE", [] (float v) { return v < 0.005f ? juce::String ("OFF") : juce::String ((int) (v * 100)) + "%"; });
+        declick->slider.setTooltip ("Removes clicks, crackle and dropouts from a bad cable or loose jack (+0.7 ms)");
+        denoise->slider.setTooltip ("Removes steady static / hiss / buzz (+5.3 ms while on)");
+
+        styleCaption (humLabel, theme::dim, 11.0f);
+        humLabel.setText ("HUM FILTER", juce::dontSendNotification);
+        addAndMakeVisible (humLabel);
+        const char* humNames[] = { "OFF", "50 Hz", "60 Hz" };
+        for (int i = 0; i < 3; ++i)
+        {
+            auto& btn = humButtons[(size_t) i];
+            btn.setButtonText (humNames[i]);
+            btn.setColour (juce::TextButton::buttonOnColourId, accent);
+            btn.setRadioGroupId (4711);
+            btn.setClickingTogglesState (true);
+            btn.onClick = [this, i] { if (humButtons[(size_t) i].getToggleState()) p.hum->set ((float) i); };
+            addAndMakeVisible (btn);
+        }
+
+        learn = std::make_unique<ParamToggle> (*p.dnLearn, "LEARN NOISE", theme::virt);
+        learn->setTooltip ("Press while only the static is audible (don't play/talk) for 2-3 s, then press again");
+        addAndMakeVisible (*learn);
+        resetProfile.setTooltip ("Forget the learned noise and go back to automatic tracking");
+        resetProfile.onClick = [this] { engine.denoiseReset[(size_t) s] = true; };
+        addAndMakeVisible (resetProfile);
+        styleCaption (dnStatus, theme::text, 11.5f);
+        addAndMakeVisible (dnStatus);
+
+        // PLUGIN INSERTS
+        inserts = std::make_unique<InsertSlotsComponent> (e, e.stripInserts[(size_t) s], mc, accent);
+        addAndMakeVisible (*inserts);
+
+        timerCallback();
+        startTimerHz (8);
+    }
+
+    void timerCallback() override
+    {
+        const int hum = (int) p.hum->get();
+        for (int i = 0; i < 3; ++i)
+            humButtons[(size_t) i].setToggleState (i == hum, juce::dontSendNotification);
+        const int st = engine.denoiseStatus[(size_t) s].load();
+        dnStatus.setText (p.dnLearn->on() ? "LISTENING TO NOISE..."
+                          : st == bvm::SpectralDenoiser::learned ? "PROFILE: LEARNED"
+                                                                 : "PROFILE: AUTO",
+                          juce::dontSendNotification);
+        dnStatus.setColour (juce::Label::textColourId, p.dnLearn->on() ? theme::virt : theme::text);
     }
 
     void paint (juce::Graphics& g) override
@@ -684,7 +885,7 @@ public:
 
     void resized() override
     {
-        panelBounds = getLocalBounds().withSizeKeepingCentre (juce::jmin (getWidth() - 40, 980), juce::jmin (getHeight() - 30, 560));
+        panelBounds = getLocalBounds().withSizeKeepingCentre (juce::jmin (getWidth() - 40, 1060), juce::jmin (getHeight() - 20, 780));
         auto r = panelBounds.reduced (16, 12);
 
         auto top = r.removeFromTop (30);
@@ -709,9 +910,12 @@ public:
                 c->setBounds (row.removeFromLeft (w));
         };
 
-        auto upper = r.removeFromTop (r.getHeight() / 2 - 4);
+        const int totalH = r.getHeight();
+        auto upper = r.removeFromTop ((int) (totalH * 0.37f));
         r.removeFromTop (8);
-        auto lower = r;
+        auto lower = r.removeFromTop ((int) (totalH * 0.30f));
+        r.removeFromTop (8);
+        auto bottom = r;
 
         // Upper row: INPUT | GATE | EQ curve + bands
         auto input = section (upper.removeFromLeft (170), "INPUT");
@@ -752,9 +956,30 @@ public:
         auto outTop = out.removeFromTop (out.getHeight() / 2);
         placeRow (outTop, { sRev, sDly });
         placeRow (out, { pan, tone });
+
+        // Bottom row: NOISE REPAIR | PLUGIN INSERTS
+        auto noise = section (bottom.removeFromLeft (bottom.getWidth() / 2 + 40), "NOISE REPAIR  (BAD CABLE / STATIC / HUM)");
+        auto knobsArea = noise.removeFromLeft (190);
+        placeRow (knobsArea, { declick, denoise });
+        noise.removeFromLeft (10);
+        humLabel.setBounds (noise.removeFromTop (16));
+        auto humRow = noise.removeFromTop (26);
+        const int hw = humRow.getWidth() / 3;
+        for (auto& btn : humButtons)
+            btn.setBounds (humRow.removeFromLeft (hw).reduced (2));
+        noise.removeFromTop (8);
+        auto learnRow = noise.removeFromTop (26);
+        learn->setBounds (learnRow.removeFromLeft (learnRow.getWidth() * 3 / 5).reduced (2));
+        resetProfile.setBounds (learnRow.reduced (2));
+        dnStatus.setBounds (noise.removeFromTop (22));
+        bottom.removeFromLeft (8);
+
+        auto ins = section (bottom, "PLUGIN INSERTS  (VST3, PRE-FADER)");
+        inserts->setBounds (ins.withHeight (juce::jmin (ins.getHeight(), 4 * 30)));
     }
 
 private:
+    Engine& engine;
     MainComponent& main;
     int s;
     StripParams& p;
@@ -768,7 +993,13 @@ private:
     juce::TextButton closeBtn { "X" }, presetBtn { "PRESETS..." };
     juce::OwnedArray<Knob> knobs;
     Knob *trim, *hpf, *drive, *gThresh, *gRange, *gAttack, *gHold, *gRelease, *lowF, *lowG, *midF, *midG, *midQ, *highF,
-        *highG, *cThresh, *cRatio, *cAttack, *cRelease, *cKnee, *cMakeup, *deess, *sRev, *sDly, *pan, *tone;
+        *highG, *cThresh, *cRatio, *cAttack, *cRelease, *cKnee, *cMakeup, *deess, *sRev, *sDly, *pan, *tone,
+        *declick, *denoise;
+    juce::Label humLabel, dnStatus;
+    std::array<juce::TextButton, 3> humButtons;
+    std::unique_ptr<ParamToggle> learn;
+    juce::TextButton resetProfile { "RESET" };
+    std::unique_ptr<InsertSlotsComponent> inserts;
     std::unique_ptr<ParamToggle> polarity, eqOn, compAuto;
     std::unique_ptr<DynamicsLed> gateLed, compLed;
     std::unique_ptr<LevelMeter> inMeter, outMeter;
@@ -780,8 +1011,8 @@ private:
 class SettingsComponent : public juce::Component
 {
 public:
-    explicit SettingsComponent (Engine& e)
-        : engine (e), selector (e.deviceManager, 0, 256, 0, 256, false, false, false, false)
+    SettingsComponent (Engine& e, MainComponent& mc)
+        : engine (e), main (mc), selector (e.deviceManager, 0, 256, 0, 256, false, false, false, false)
     {
         addAndMakeVisible (selector);
 
@@ -803,6 +1034,8 @@ public:
 
         autoBtn.onClick = [this] { engine.autoAssignStrips(); };
         addAndMakeVisible (autoBtn);
+        pluginsBtn.onClick = [this] { main.openPluginManager(); };
+        addAndMakeVisible (pluginsBtn);
 
         help.setMultiLine (true);
         help.setReadOnly (true);
@@ -826,6 +1059,8 @@ public:
         auto r = getLocalBounds().reduced (12);
         help.setBounds (r.removeFromBottom (92));
         r.removeFromBottom (8);
+        pluginsBtn.setBounds (r.removeFromBottom (28).removeFromRight (190).reduced (2));
+        r.removeFromBottom (6);
         auto row = r.removeFromBottom (28);
         stripsLabel.setBounds (row.removeFromLeft (170));
         autoBtn.setBounds (row.removeFromRight (190).reduced (2));
@@ -837,10 +1072,11 @@ public:
 
 private:
     Engine& engine;
+    MainComponent& main;
     juce::AudioDeviceSelectorComponent selector;
     juce::Label stripsLabel;
     juce::OwnedArray<ParamToggle> stripToggles;
-    juce::TextButton autoBtn { "AUTO-ASSIGN FROM INTERFACE" };
+    juce::TextButton autoBtn { "AUTO-ASSIGN FROM INTERFACE" }, pluginsBtn { "SCAN / MANAGE VST3 PLUGINS" };
     juce::TextEditor help;
 };
 
@@ -863,6 +1099,7 @@ MainComponent::MainComponent (Engine& e) : engine (e)
     addAndMakeVisible (stripViewport);
 
     engine.onLayoutChanged = [this] { rebuild(); };
+    engine.onPluginRemoved = [this] (juce::AudioProcessor* proc) { closePluginEditor (proc); };
     rebuild();
     setWantsKeyboardFocus (true);
     setSize (1500, 800);
@@ -872,6 +1109,8 @@ MainComponent::MainComponent (Engine& e) : engine (e)
 MainComponent::~MainComponent()
 {
     engine.onLayoutChanged = nullptr;
+    engine.onPluginRemoved = nullptr;
+    pluginWindows.clear();
     detail.reset();
     juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
     setLookAndFeel (nullptr);
@@ -879,6 +1118,7 @@ MainComponent::~MainComponent()
 
 void MainComponent::rebuild()
 {
+    const int reopen = detail != nullptr ? detailStrip : -1;
     closeDetail();
     stripComps.clear();
     fxComps.clear();
@@ -890,13 +1130,17 @@ void MainComponent::rebuild()
     for (int f = 0; f < kNumFx; ++f)
         addAndMakeVisible (fxComps.add (new FxReturnComponent (engine, f)));
     for (int b = 0; b < kNumBuses; ++b)
-        addAndMakeVisible (busComps.add (new BusComponent (engine, b)));
+        addAndMakeVisible (busComps.add (new BusComponent (engine, *this, b)));
 
     resized();
+    if (reopen >= 0 && engine.strips[(size_t) reopen]->active->on())
+        openDetail (reopen);
 }
 
 void MainComponent::openDetail (int s)
 {
+    closeDetail();
+    detailStrip = s;
     detail = std::make_unique<DetailPanel> (engine, *this, s);
     addAndMakeVisible (*detail);
     detail->setBounds (getLocalBounds().withTrimmedTop (headerHeight));
@@ -997,10 +1241,50 @@ void MainComponent::resized()
         detail->setBounds (getLocalBounds().withTrimmedTop (headerHeight));
 }
 
+void MainComponent::openPluginEditor (juce::AudioPluginInstance* plugin)
+{
+    if (plugin == nullptr) return;
+    for (auto* w : pluginWindows)
+        if (&w->processor == plugin) { w->toFront (true); return; }
+
+    juce::Component::SafePointer<MainComponent> safeThis (this);
+    pluginWindows.add (new PluginWindow (*plugin, [safeThis] (PluginWindow* w)
+    {
+        juce::MessageManager::callAsync ([safe = safeThis, w]
+        {
+            if (safe != nullptr && safe->pluginWindows.contains (w))
+                safe->pluginWindows.removeObject (w);
+        });
+    }));
+}
+
+void MainComponent::closePluginEditor (juce::AudioProcessor* proc)
+{
+    for (int i = pluginWindows.size(); --i >= 0;)
+        if (&pluginWindows[i]->processor == proc)
+            pluginWindows.remove (i);
+}
+
+void MainComponent::openPluginManager()
+{
+    auto* list = new juce::PluginListComponent (engine.formatManager, engine.knownPlugins,
+                                                Engine::getDataDir().getChildFile ("scan-crashed-plugins.txt"), nullptr);
+    list->setSize (760, 520);
+    juce::DialogWindow::LaunchOptions o;
+    o.content.setOwned (list);
+    o.dialogTitle = "VST3 Plugins  -  click 'Options...' > 'Scan for new or updated VST3 plug-ins'";
+    o.dialogBackgroundColour = theme::bg;
+    o.escapeKeyTriggersCloseButton = true;
+    o.useNativeTitleBar = true;
+    o.resizable = true;
+    o.componentToCentreAround = this;
+    o.launchAsync();
+}
+
 void MainComponent::openSettings()
 {
     juce::DialogWindow::LaunchOptions o;
-    o.content.setOwned (new SettingsComponent (engine));
+    o.content.setOwned (new SettingsComponent (engine, *this));
     o.dialogTitle = "Audio Setup";
     o.dialogBackgroundColour = theme::bg;
     o.escapeKeyTriggersCloseButton = true;

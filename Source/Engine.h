@@ -3,6 +3,8 @@
 #include "Params.h"
 #include "DSP.h"
 #include "ExternalBridge.h"
+#include "Repair.h"
+#include "InsertChain.h"
 
 // The mixing engine: runs inside the ASIO callback of the Focusrite (or whichever
 // device is selected), so hardware in -> processing -> hardware out costs exactly one
@@ -30,6 +32,20 @@ public:
     std::array<std::unique_ptr<ExternalBridge>, kNumVirtStrips> inBridges;
     std::array<juce::String, kNumVirtBuses> outBridgeNames;
     std::array<juce::String, kNumVirtStrips> inBridgeNames;
+
+    // VST3 plugin hosting.
+    juce::AudioPluginFormatManager formatManager;
+    juce::KnownPluginList knownPlugins;
+    std::array<InsertChain, kNumStrips> stripInserts;
+    std::array<InsertChain, kNumBuses> busInserts;
+    juce::String loadPlugin (InsertChain&, int slot, const juce::PluginDescription&);
+    void removePlugin (InsertChain&, int slot);
+    std::function<void (juce::AudioProcessor*)> onPluginRemoved; // UI closes the editor window
+    static juce::File getDataDir();
+
+    // Noise repair status for the UI.
+    std::array<std::atomic<int>, kNumStrips> denoiseStatus {};
+    std::array<std::atomic<bool>, kNumStrips> denoiseReset {};
 
     void setOutBridgeDevice (int index, const juce::String& name);
     void setInBridgeDevice (int index, const juce::String& name);
@@ -59,6 +75,7 @@ private:
     void handleAsyncUpdate() override;
 
     void enableAllChannels();
+    void restoreInserts (InsertChain&, const juce::XmlElement*);
     void reopenBridges();
     std::unique_ptr<juce::XmlElement> createStateXml (bool includeDevice) const;
     void restoreStateXml (const juce::XmlElement&, bool includeDevice);
@@ -66,6 +83,9 @@ private:
 
     struct StripState
     {
+        bvm::Declicker declick;
+        bvm::HumFilter hum;
+        bvm::SpectralDenoiser denoise;
         bvm::Biquad hpf[2], eqLow[2], eqMid[2], eqHigh[2], tiltLow[2], tiltHigh[2], deessHp[2];
         bvm::Gate gate;
         bvm::Compressor comp;
@@ -101,5 +121,6 @@ private:
     double bridgeRate = 0;
     int bridgeBlock = 0;
     bool enforcingChannels = false;
+    juce::String lastLayoutKey;
     bool firstRun = false;
 };
