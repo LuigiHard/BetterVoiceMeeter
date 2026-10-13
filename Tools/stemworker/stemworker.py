@@ -414,8 +414,20 @@ class Moises:
     def gql(self, query: str, variables: dict | None = None) -> dict:
         if time.time() - self.token_time > 45 * 60:  # ID tokens last an hour
             self.token, self.token_time = moises_id_token(self.refresh), time.time()
-        r = http_json(MOISES_GRAPHQL, {"query": query, "variables": variables or {}},
-                      {"Authorization": self.token, "apollographql-client-name": "connected-shell"})
+        for attempt in range(4):  # Moises occasionally answers "Internal server error": retry with backoff
+            try:
+                r = http_json(MOISES_GRAPHQL, {"query": query, "variables": variables or {}},
+                              {"Authorization": self.token, "apollographql-client-name": "connected-shell"})
+            except RuntimeError as e:
+                if attempt < 3 and ("HTTP 5" in str(e) or "timed out" in str(e)):
+                    time.sleep(2 ** attempt * 2)
+                    continue
+                raise
+            transient = any("internal server error" in (e.get("message") or "").lower() for e in r.get("errors") or [])
+            if transient and attempt < 3:
+                time.sleep(2 ** attempt * 2)
+                continue
+            break
         if r.get("errors"):
             msg = "; ".join(e.get("message", "") for e in r["errors"])
             if "CREDIT" in msg.upper():
@@ -454,7 +466,8 @@ def separate_moises(song_dir: Path, refresh_token: str, five_stems: bool, title:
     put_signed(up["signedUrl"], flac.read_bytes())
     flac.unlink(missing_ok=True)
 
-    stems = ["lead_vocals", "backing_vocals"] + (["drums", "bass"] if five_stems else [])
+    # Moises's stem names: "vocals" + "backing_vocals" splits the voice into lead and backing.
+    stems = ["vocals", "backing_vocals"] + (["drums", "bass"] if five_stems else [])
     task = m.gql("""mutation CreateTaskV2($file: FileInput, $operations: [OperationInput]) {
         createTaskV2(file: $file, operations: $operations) }""", {
         "file": {"provider": "FILESYSTEM", "input": up.get("input") or "song.flac", "tempLocation": up["tempLocation"],
@@ -481,7 +494,7 @@ def separate_moises(song_dir: Path, refresh_token: str, five_stems: bool, title:
         progress("separate", min(0.85, 0.2 + (time.time() - started) / 300), f"Moises is separating ({status.lower() or 'queued'})")
         time.sleep(5)
 
-    names = {"lead_vocals": "lead", "backing_vocals": "backing", "drums": "drums", "bass": "bass"}
+    names = {"vocals": "lead", "lead_vocals": "lead", "backing_vocals": "backing", "drums": "drums", "bass": "bass"}
     got = []
     for item in sep["stems"]:
         stem = names.get(item.get("stem"), "other" if five_stems else "instrumental")
@@ -819,21 +832,24 @@ def matches_recording(r: dict, duration: float) -> bool:
 
 
 def find_lyrics(song_dir: Path, meta: dict, provided=None, resync: bool = False) -> None:
-    """Synced lyrics, best first:
-       1. Music.AI's own transcription (cloud engine)
-       2. LRCLIB synced lyrics whose length matches this recording
-       3. LRCLIB lyrics text (synced for another version, or plain) re-timed with Whisper on the lead vocal
-       4. Whisper transcription of the lead vocal"""
-    lines, source = [], ""
-    if provided:
-        kind, value = provided if isinstance(provided, tuple) else ("Music.AI", provided)
-        lines = moises_lyrics(value) if kind == "Moises" else musicai_lyrics(value)
-        source = kind if lines else ""
+    """Synced lyrics, best first (correct words beat AI-transcribed words):
+       1. LRCLIB synced lyrics whose length matches this recording (+ AI word timing)
+       2. LRCLIB lyrics text (other version or plain) synced to this recording by forced alignment
+       3. The separation engine's own lyrics (Moises / Music.AI), already timed to this recording
+       4. Whisper transcription of the vocal
+    resync=True skips step 1 (re-time everything to this recording)."""
+    if provided is None and (song_dir / "moises_lyrics.json").exists():  # FIND LYRICS after a Moises run
+        try:
+            provided = ("Moises", json.loads((song_dir / "moises_lyrics.json").read_text(encoding="utf-8")))
+        except ValueError:
+            provided = None
 
-    if not lines:
-        progress("lyrics", 0.93, "Searching LRCLIB for lyrics")
-        cands = lrclib_candidates(meta.get("artist", ""), meta.get("track", ""), meta.get("duration", 0))
-        exact = [r for r in cands if matches_recording(r, meta.get("duration", 0))]
+    lines, source = [], ""
+    progress("lyrics", 0.93, "Searching LRCLIB for lyrics")
+    cands = lrclib_candidates(meta.get("artist", ""), meta.get("track", ""), meta.get("duration", 0))
+    exact = [r for r in cands if matches_recording(r, meta.get("duration", 0))]
+    vocals = None
+    try:
         if exact and not resync:
             lines, source = parse_lrc(exact[0]["syncedLyrics"]), "LRCLIB (synced)"
             try:  # add word-by-word timing, keeping LRCLIB's trusted line starts
@@ -842,27 +858,35 @@ def find_lyrics(song_dir: Path, meta: dict, provided=None, resync: bool = False)
                 aligned, _ = forced_align(vocals, [l["text"] for l in lines])
                 if len(aligned) == len(lines):
                     lines, source = add_word_timing(lines, aligned), "LRCLIB (synced) + AI word timing"
-                if vocals.name == "align_vocals.wav":
-                    vocals.unlink(missing_ok=True)
             except Exception:  # noqa: BLE001 - word timing is a bonus; keep the line timing
                 traceback.print_exc(file=sys.stderr)
-        else:
-            vocals = vocal_track(song_dir)
+
+        if not lines:
             text_cands = exact + [r for r in cands if r not in exact]
             text = plain_lines(text_cands[0]) if text_cands else []
             if text:
                 progress("lyrics", 0.94, "Syncing lyrics to the vocal (forced alignment)")
+                vocals = vocals or vocal_track(song_dir)
                 lines, conf = forced_align(vocals, text)
-                source = f"LRCLIB + AI sync (confidence {int(conf * 100)}%)"
-            if not lines:
-                progress("lyrics", 0.94, "No lyrics found online: transcribing the vocal with AI (Whisper)")
-                heard, lang = whisper_words(vocals, WHISPER_TRANSCRIBE_MODEL)
-                lines = lines_from_words(heard)
-                if lines:  # tighten Whisper's word times with forced alignment of its own transcript
-                    aligned, _ = forced_align(vocals, [l["text"] for l in lines])
-                    lines = aligned or lines
-                source = f"AI transcription ({lang})" if lines else ""
-            vocals.unlink(missing_ok=True) if vocals.name == "align_vocals.wav" else None
+                source = f"LRCLIB + AI sync (confidence {int(conf * 100)}%)" if lines else ""
+
+        if not lines and provided:
+            kind, value = provided if isinstance(provided, tuple) else ("Music.AI", provided)
+            lines = moises_lyrics(value) if kind == "Moises" else musicai_lyrics(value)
+            source = kind if lines else ""
+
+        if not lines:
+            progress("lyrics", 0.94, "No lyrics found online: transcribing the vocal with AI (Whisper)")
+            vocals = vocals or vocal_track(song_dir)
+            heard, lang = whisper_words(vocals, WHISPER_TRANSCRIBE_MODEL)
+            lines = lines_from_words(heard)
+            if lines:  # tighten Whisper's word times with forced alignment of its own transcript
+                aligned, _ = forced_align(vocals, [l["text"] for l in lines])
+                lines = aligned or lines
+            source = f"AI transcription ({lang})" if lines else ""
+    finally:
+        if vocals is not None and vocals.name == "align_vocals.wav":
+            vocals.unlink(missing_ok=True)
 
     old_offset = 0.0
     if (song_dir / "lyrics.json").exists():
