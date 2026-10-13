@@ -135,6 +135,19 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat();
+        if (theme::focusrite())
+        {
+            // Focusrite Control meter: black well, the two channels side by side with a hairline between.
+            g.setColour (juce::Colour (0xff0b0b0b));
+            g.fillRect (r);
+            g.setColour (theme::border);
+            g.drawRect (r, 1.0f);
+            const auto inner = r.reduced (1.0f);
+            const float w = (inner.getWidth() - 1.0f) / 2.0f;
+            drawBar (g, inner.withWidth (w), levels[0], holds[0]);
+            drawBar (g, inner.withTrimmedLeft (w + 1.0f), levels[1], holds[1]);
+            return;
+        }
         g.setColour (theme::bg);
         g.fillRoundedRectangle (r, 2.0f);
         const float w = (r.getWidth() - 3.0f) / 2.0f;
@@ -143,12 +156,23 @@ public:
     }
 
     static float dbToPos (float db) { return juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 72.0f); } // -60..+12
+    float getPeakHoldDb() const noexcept { return juce::jmax (holds[0], holds[1]); }
 
 private:
     void drawBar (juce::Graphics& g, juce::Rectangle<float> r, float db, float hold)
     {
         const float pos = dbToPos (db);
-        if (pos > 0)
+        if (pos > 0 && theme::focusrite())
+        {
+            // One continuous gradient over the meter's height: green, turning yellow near the top, red at 0 dB.
+            juce::ColourGradient grad (theme::meterLow, 0, r.getBottom(), theme::meterHigh, 0, r.getY(), false);
+            grad.addColour (dbToPos (-18.0f), theme::meterLow);
+            grad.addColour (dbToPos (-6.0f), theme::meterMid);
+            grad.addColour (dbToPos (-1.0f), theme::meterHigh);
+            g.setGradientFill (grad);
+            g.fillRect (r.withTop (r.getBottom() - r.getHeight() * pos));
+        }
+        else if (pos > 0)
         {
             auto bar = r.withTop (r.getBottom() - r.getHeight() * pos);
             juce::ColourGradient grad (theme::meterLow, 0, r.getBottom(), theme::meterHigh, 0, r.getY(), false);
@@ -184,7 +208,7 @@ private:
 };
 
 // Vertical fader with a meter next to it and dB scale + readout.
-class FaderMeter : public juce::Component
+class FaderMeter : public juce::Component, private juce::Timer
 {
 public:
     FaderMeter (Param& p, Meter& m, juce::Colour accent)
@@ -197,10 +221,13 @@ public:
         fader.setVelocityBasedMode (false);
         fader.setMouseDragSensitivity (300);
         fader.onValueChange = [this, prev = fader.onValueChange] { prev(); repaint(); };
+        if (theme::focusrite())
+            startTimerHz (10); // keep the peak readout live
     }
 
     void paint (juce::Graphics& g) override
     {
+        if (theme::focusrite()) { paintFocusrite (g); return; }
         auto r = getLocalBounds();
         auto readout = r.removeFromBottom (16);
         g.setFont (theme::font (11.0f, true));
@@ -223,6 +250,15 @@ public:
     {
         auto r = getLocalBounds();
         r.removeFromBottom (18);
+        if (theme::focusrite())
+        {
+            r.removeFromTop (18); // peak readout
+            scaleArea = r.removeFromRight (24);
+            meter.setBounds (r.removeFromRight (16).reduced (0, 11));
+            r.removeFromRight (4);
+            fader.setBounds (r);
+            return;
+        }
         meter.setBounds (r.removeFromRight (14).reduced (0, 11));
         r.removeFromRight (3);
         scaleArea = r.removeFromLeft (20);
@@ -233,6 +269,48 @@ public:
     LevelMeter meter;
 
 private:
+    void timerCallback() override
+    {
+        const float hold = meter.getPeakHoldDb();
+        if (std::abs (hold - shownHold) >= 0.1f)
+        {
+            shownHold = hold;
+            const auto m = meter.getBounds();
+            repaint (m.getX() - 6, m.getY() - 29, m.getWidth() + 12, 16);
+        }
+    }
+
+    float shownHold = -100.0f;
+
+    void paintFocusrite (juce::Graphics& g)
+    {
+        // Peak readout box above the meter, like Focusrite Control ("-17.4", "-inf").
+        const auto m = meter.getBounds();
+        const auto box = juce::Rectangle<int> (m.getX() - 6, m.getY() - 29, m.getWidth() + 12, 16);
+        g.setColour (juce::Colour (0xff0b0b0b));
+        g.fillRect (box);
+        g.setColour (theme::text);
+        g.setFont (theme::font (9.5f, true));
+        const float hold = meter.getPeakHoldDb();
+        g.drawText (hold <= -59.0f ? juce::String ("-inf") : juce::String (hold, 1), box, juce::Justification::centred);
+
+        // Scale on the right: "0 -", "6 -" ... with small ticks between, Focusrite style.
+        g.setFont (theme::font (9.5f));
+        for (float db : { 12.0f, 6.0f, 0.0f, -6.0f, -12.0f, -18.0f, -24.0f, -30.0f, -36.0f, -48.0f, -60.0f })
+        {
+            const float y = m.getBottom() - LevelMeter::dbToPos (db) * m.getHeight();
+            g.setColour (theme::dim);
+            g.drawText ((db > 0 ? "+" : "") + juce::String ((int) std::abs (db)), scaleArea.getX() + 6, (int) y - 5, scaleArea.getWidth() - 6, 10,
+                        juce::Justification::centredLeft);
+            g.fillRect ((float) scaleArea.getX(), y, 3.0f, 1.0f);
+        }
+
+        g.setFont (theme::font (11.0f, true));
+        g.setColour (theme::text);
+        const float v = fader.param.get();
+        g.drawText ((v > 0 ? "+" : "") + juce::String (v, 1), getLocalBounds().removeFromBottom (16), juce::Justification::centred);
+    }
+
     juce::Rectangle<int> scaleArea;
 };
 
@@ -245,10 +323,29 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat().reduced (0.5f);
-        juce::ColourGradient grad (accent.withAlpha (0.10f), r.getCentreX(), r.getY(),
-                                   theme::bg, r.getCentreX(), r.getBottom(), false);
-        g.setGradientFill (grad);
-        g.fillRoundedRectangle (r, 4.0f);
+        if (theme::focusrite())
+        {
+            // Colourful field: bright (cyan) at the top, warm (orange) at the bottom, purple in between.
+            juce::ColourGradient grad (juce::Colour (0xff1fb6ff), r.getCentreX(), r.getY(),
+                                       juce::Colour (0xffff7a1a), r.getCentreX(), r.getBottom(), false);
+            grad.addColour (0.5, juce::Colour (0xff8a3dff));
+            g.setGradientFill (grad);
+            g.setOpacity (0.55f);
+            g.fillRoundedRectangle (r, 4.0f);
+            g.setOpacity (1.0f);
+            juce::ColourGradient edges (juce::Colours::black.withAlpha (0.45f), r.getX(), r.getCentreY(),
+                                        juce::Colours::black.withAlpha (0.45f), r.getRight(), r.getCentreY(), false);
+            edges.addColour (0.5, juce::Colours::transparentBlack);
+            g.setGradientFill (edges);
+            g.fillRoundedRectangle (r, 4.0f);
+        }
+        else
+        {
+            juce::ColourGradient grad (accent.withAlpha (0.10f), r.getCentreX(), r.getY(),
+                                       theme::bg, r.getCentreX(), r.getBottom(), false);
+            g.setGradientFill (grad);
+            g.fillRoundedRectangle (r, 4.0f);
+        }
         g.setColour (theme::border);
         g.drawRoundedRectangle (r, 4.0f, 1.0f);
         g.setColour (theme::border.withAlpha (0.6f));
@@ -263,9 +360,10 @@ public:
         g.drawText ("R", r.reduced (4), juce::Justification::centredRight);
 
         const auto pt = toPoint();
-        g.setColour (accent.withAlpha (0.25f));
+        const auto dot = theme::focusrite() ? juce::Colours::white : accent;
+        g.setColour (dot.withAlpha (0.3f));
         g.fillEllipse (juce::Rectangle<float> (16, 16).withCentre (pt));
-        g.setColour (accent);
+        g.setColour (dot);
         g.fillEllipse (juce::Rectangle<float> (8, 8).withCentre (pt));
     }
 

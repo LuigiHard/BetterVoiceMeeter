@@ -781,6 +781,8 @@ std::unique_ptr<juce::XmlElement> Engine::createStateXml (bool includeDevice) co
 {
     auto xml = std::make_unique<juce::XmlElement> ("BetterVoiceMeeter");
     if (includeDevice)
+        xml->setAttribute ("theme", uiTheme);
+    if (includeDevice)
         if (auto dev = deviceManager.createStateXml())
             xml->addChildElement (dev.release());
 
@@ -824,6 +826,8 @@ std::unique_ptr<juce::XmlElement> Engine::createStateXml (bool includeDevice) co
 
 void Engine::restoreStateXml (const juce::XmlElement& xml, bool includeDevice)
 {
+    if (xml.hasAttribute ("theme"))
+        uiTheme = xml.getStringAttribute ("theme", uiTheme);
     if (includeDevice)
         if (auto* dev = xml.getChildByName ("DEVICESETUP"))
             deviceManager.initialise (64, 64, dev, true);

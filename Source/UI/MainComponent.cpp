@@ -80,9 +80,20 @@ void styleCaption (juce::Label& l, juce::Colour c, float size = 12.0f)
     l.setInterceptsMouseClicks (false, false);
 }
 
-void paintPanel (juce::Graphics& g, juce::Rectangle<int> b, juce::Colour accent)
+void paintPanel (juce::Graphics& g, juce::Rectangle<int> b, juce::Colour accent, float stripeY = 47.0f)
 {
     auto r = b.toFloat().reduced (2.0f);
+    if (theme::focusrite())
+    {
+        // Focusrite Control card: dark grey, red outline, coloured rule under the channel name.
+        g.setColour (theme::panel);
+        g.fillRoundedRectangle (r, 6.0f);
+        g.setColour (theme::cardBorder);
+        g.drawRoundedRectangle (r, 6.0f, 1.5f);
+        g.setColour (accent);
+        g.fillRect (r.getX() + 1.0f, r.getY() + stripeY, r.getWidth() - 2.0f, 2.0f);
+        return;
+    }
     g.setColour (theme::panel);
     g.fillRoundedRectangle (r, 5.0f);
     g.setColour (theme::border);
@@ -259,7 +270,7 @@ public:
 
         name.setText (p.label, juce::dontSendNotification);
         name.setFont (theme::font (13.0f, true));
-        name.setColour (juce::Label::textColourId, accent);
+        name.setColour (juce::Label::textColourId, theme::titleColour (accent));
         name.setJustificationType (juce::Justification::centred);
         name.setEditable (false, true, false);
         name.setTooltip ("Double-click to rename");
@@ -422,7 +433,7 @@ class FxReturnComponent : public juce::Component
 public:
     FxReturnComponent (Engine& e, int index) : f (index), p (*e.fx[(size_t) index])
     {
-        styleCaption (title, theme::fx, 13.0f);
+        styleCaption (title, theme::titleColour (theme::fx), 13.0f);
         title.setText (f == 0 ? "REVERB" : "DELAY", juce::dontSendNotification);
         addAndMakeVisible (title);
 
@@ -456,7 +467,7 @@ public:
         addAndMakeVisible (*mute);
     }
 
-    void paint (juce::Graphics& g) override { paintPanel (g, getLocalBounds(), theme::fx); }
+    void paint (juce::Graphics& g) override { paintPanel (g, getLocalBounds(), theme::fx, 29.0f); }
 
     void resized() override
     {
@@ -496,7 +507,7 @@ public:
     BusComponent (Engine& e, MainComponent& mc, int index) : engine (e), main (mc), b (index), p (*e.buses[(size_t) index])
     {
         accent = b < kNumHwBuses ? theme::busA : theme::busB;
-        styleCaption (title, accent, 15.0f);
+        styleCaption (title, theme::titleColour (accent), 15.0f);
         title.setText (busName (b), juce::dontSendNotification);
         addAndMakeVisible (title);
 
@@ -1037,6 +1048,26 @@ public:
 
         autoBtn.onClick = [this] { engine.autoAssignStrips(); };
         addAndMakeVisible (autoBtn);
+
+        styleCaption (themeLabel, theme::text, 13.0f);
+        themeLabel.setJustificationType (juce::Justification::centredLeft);
+        themeLabel.setText ("Theme:", juce::dontSendNotification);
+        addAndMakeVisible (themeLabel);
+        themeBox.addItem ("Classic (Voicemeeter style)", 1);
+        themeBox.addItem ("Focusrite (Focusrite Control style)", 2);
+        themeBox.setSelectedId (theme::focusrite() ? 2 : 1, juce::dontSendNotification);
+        themeBox.onChange = [this]
+        {
+            const auto style = themeBox.getSelectedId() == 2 ? theme::Style::focusrite : theme::Style::classic;
+            if (style == theme::style) return;
+            engine.uiTheme = theme::nameOf (style);
+            // The main window rebuilds itself with the new palette; close this dialog first.
+            if (auto* dw = findParentComponentOfClass<juce::DialogWindow>())
+                dw->exitModalState (0);
+            if (engine.onThemeChanged)
+                juce::MessageManager::callAsync ([&e = engine] { if (e.onThemeChanged) e.onThemeChanged(); });
+        };
+        addAndMakeVisible (themeBox);
         pluginsBtn.onClick = [this] { main.openPluginManager(); };
         addAndMakeVisible (pluginsBtn);
 
@@ -1062,7 +1093,10 @@ public:
         auto r = getLocalBounds().reduced (12);
         help.setBounds (r.removeFromBottom (92));
         r.removeFromBottom (8);
-        pluginsBtn.setBounds (r.removeFromBottom (28).removeFromRight (190).reduced (2));
+        auto themeRow = r.removeFromBottom (28);
+        pluginsBtn.setBounds (themeRow.removeFromRight (190).reduced (2));
+        themeLabel.setBounds (themeRow.removeFromLeft (60));
+        themeBox.setBounds (themeRow.removeFromLeft (280).reduced (2));
         r.removeFromBottom (6);
         auto row = r.removeFromBottom (28);
         stripsLabel.setBounds (row.removeFromLeft (170));
@@ -1080,6 +1114,8 @@ private:
     juce::Label stripsLabel;
     juce::OwnedArray<ParamToggle> stripToggles;
     juce::TextButton autoBtn { "AUTO-ASSIGN FROM INTERFACE" }, pluginsBtn { "SCAN / MANAGE VST3 PLUGINS" };
+    juce::Label themeLabel;
+    juce::ComboBox themeBox;
     juce::TextEditor help;
 };
 

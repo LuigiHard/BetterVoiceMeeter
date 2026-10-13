@@ -1,25 +1,62 @@
 #pragma once
 #include <JuceHeader.h>
 
-// Dark, Voicemeeter-inspired palette.
+// App themes. "Classic" is the original Voicemeeter-inspired look; "Focusrite" follows
+// Focusrite Control 2: near-black, grey cards, red/blue channel underlines, silver faders,
+// solid green meters. The colours are variables so the theme can change at runtime
+// (the window is rebuilt after switching).
 namespace theme
 {
-const juce::Colour bg        { 0xff1b1e24 };
-const juce::Colour panel     { 0xff262a32 };
-const juce::Colour panelHi   { 0xff30353f };
-const juce::Colour border    { 0xff3b414c };
-const juce::Colour text      { 0xffd6dbe3 };
-const juce::Colour dim       { 0xff858e9d };
-const juce::Colour hw        { 0xff5ab4ff };   // hardware inputs
-const juce::Colour virt      { 0xffffb04a };   // virtual inputs
-const juce::Colour fx        { 0xffc58cff };   // FX returns
-const juce::Colour busA      { 0xff3fd49a };   // A (hardware) buses
-const juce::Colour busB      { 0xffffc94a };   // B (virtual) buses
-const juce::Colour mute      { 0xffff5a5a };
-const juce::Colour solo      { 0xffffe14d };
-const juce::Colour meterLow  { 0xff2ed47a };
-const juce::Colour meterMid  { 0xffe8d84a };
-const juce::Colour meterHigh { 0xffff4d4d };
+enum class Style { classic, focusrite };
+inline Style style = Style::classic;
+
+inline juce::Colour bg, panel, panelHi, border, text, dim,
+    hw,        // hardware inputs
+    virt,      // virtual inputs / playback
+    fx,        // FX returns
+    busA,      // A (hardware) buses
+    busB,      // B (virtual) buses
+    mute, solo, meterLow, meterMid, meterHigh,
+    cardBorder; // strip / card outline
+
+inline bool focusrite() noexcept { return style == Style::focusrite; }
+
+inline void apply (Style s)
+{
+    style = s;
+    if (s == Style::focusrite)
+    {
+        bg = juce::Colour (0xff121212);  panel = juce::Colour (0xff1f1f1f);  panelHi = juce::Colour (0xff2c2c2c);
+        border = juce::Colour (0xff3a3a3a);  text = juce::Colour (0xffeaeaea);  dim = juce::Colour (0xff8f8f8f);
+        hw = juce::Colour (0xffe1262f);    // Focusrite red: input channels
+        virt = juce::Colour (0xff3b82f6);  // blue: playback / virtual
+        fx = juce::Colour (0xff9f7aea);
+        busA = juce::Colour (0xff1fa463);  // green toggles (+48V / Inst)
+        busB = juce::Colour (0xffc9a227);  // gold toggle (Air)
+        mute = juce::Colour (0xffe1262f);  solo = juce::Colour (0xffe8c547);
+        meterLow = juce::Colour (0xff1fc46a);  meterMid = juce::Colour (0xffe8c547);  meterHigh = juce::Colour (0xffe1262f);
+        cardBorder = juce::Colour (0xffd4232c);  // Focusrite red outline
+    }
+    else
+    {
+        bg = juce::Colour (0xff1b1e24);  panel = juce::Colour (0xff262a32);  panelHi = juce::Colour (0xff30353f);
+        border = juce::Colour (0xff3b414c);  text = juce::Colour (0xffd6dbe3);  dim = juce::Colour (0xff858e9d);
+        hw = juce::Colour (0xff5ab4ff);  virt = juce::Colour (0xffffb04a);  fx = juce::Colour (0xffc58cff);
+        busA = juce::Colour (0xff3fd49a);  busB = juce::Colour (0xffffc94a);
+        mute = juce::Colour (0xffff5a5a);  solo = juce::Colour (0xffffe14d);
+        meterLow = juce::Colour (0xff2ed47a);  meterMid = juce::Colour (0xffe8d84a);  meterHigh = juce::Colour (0xffff4d4d);
+        cardBorder = border;
+    }
+}
+
+inline Style styleFromName (const juce::String& n) { return n == "focusrite" ? Style::focusrite : Style::classic; }
+inline juce::String nameOf (Style s) { return s == Style::focusrite ? "focusrite" : "classic"; }
+
+// Channel titles: coloured in Classic; white with a coloured underline in Focusrite.
+inline juce::Colour titleColour (juce::Colour accent) { return focusrite() ? text : accent; }
+
+// Initialise the palette before any component reads it.
+inline const bool initialised = (apply (Style::classic), true);
 
 inline juce::Font font (float h, bool bold = false)
 {
@@ -56,10 +93,11 @@ public:
         auto c = b.getToggleState() ? b.findColour (juce::TextButton::buttonOnColourId) : base;
         if (down) c = c.darker (0.2f);
         else if (over) c = c.brighter (0.12f);
+        const float radius = theme::focusrite() ? 4.0f : 3.0f;
         g.setColour (c);
-        g.fillRoundedRectangle (r, 3.0f);
-        g.setColour (b.getToggleState() ? c.brighter (0.4f) : theme::border);
-        g.drawRoundedRectangle (r, 3.0f, 1.0f);
+        g.fillRoundedRectangle (r, radius);
+        g.setColour (b.getToggleState() ? c.brighter (theme::focusrite() ? 0.25f : 0.4f) : theme::border);
+        g.drawRoundedRectangle (r, radius, 1.0f);
     }
 
     juce::Font getTextButtonFont (juce::TextButton& b, int h) override
@@ -114,9 +152,29 @@ public:
             LookAndFeel_V4::drawLinearSlider (g, x, y, w, h, pos, 0, 0, style, s);
             return;
         }
+        const float cx = x + w * 0.5f;
+        if (theme::focusrite())
+        {
+            // Focusrite Control style: thin light rail, unity tick, silver metal cap.
+            g.setColour (juce::Colour (0xffd0d0d0).withAlpha (0.85f));
+            g.fillRoundedRectangle (cx - 1.0f, (float) y + 4, 2.0f, (float) h - 8, 1.0f);
+            const float zy = (float) (y + h - s.valueToProportionOfLength (0.0) * h);
+            g.setColour (theme::dim);
+            g.fillRect (cx - 12.0f, zy, 7.0f, 1.0f);
+            g.fillRect (cx + 5.0f, zy, 7.0f, 1.0f);
+            const auto cap = juce::Rectangle<float> (juce::jmin (22.0f, (float) w - 2.0f), 28.0f).withCentre ({ cx, pos });
+            juce::ColourGradient metal (juce::Colour (0xfff4f4f4), cap.getX(), cap.getY(), juce::Colour (0xff8e8e8e), cap.getX(), cap.getBottom(), false);
+            metal.addColour (0.48, juce::Colour (0xffd6d6d6));
+            metal.addColour (0.52, juce::Colour (0xffb0b0b0));
+            g.setGradientFill (metal);
+            g.fillRoundedRectangle (cap, 3.0f);
+            g.setColour (juce::Colour (0xff4a4a4a));
+            g.drawRoundedRectangle (cap, 3.0f, 1.0f);
+            g.fillRect (cap.withSizeKeepingCentre (cap.getWidth() - 6.0f, 1.5f));
+            return;
+        }
         // Voicemeeter-style fader: thin slot, wide flat cap.
         const auto accent = s.findColour (juce::Slider::thumbColourId);
-        const float cx = x + w * 0.5f;
         g.setColour (theme::bg);
         g.fillRoundedRectangle (cx - 2.5f, (float) y, 5.0f, (float) h, 2.5f);
 
@@ -138,7 +196,7 @@ public:
 
     int getSliderThumbRadius (juce::Slider& s) override
     {
-        return s.getSliderStyle() == juce::Slider::LinearVertical ? 11 : LookAndFeel_V4::getSliderThumbRadius (s);
+        return s.getSliderStyle() == juce::Slider::LinearVertical ? (theme::focusrite() ? 14 : 11) : LookAndFeel_V4::getSliderThumbRadius (s);
     }
 
     juce::Label* createSliderTextBox (juce::Slider& s) override

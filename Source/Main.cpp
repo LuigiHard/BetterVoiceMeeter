@@ -1,4 +1,4 @@
-﻿#include <JuceHeader.h>
+#include <JuceHeader.h>
 #include "Engine.h"
 #include "UI/MainComponent.h"
 
@@ -15,6 +15,7 @@ public:
                                                                 "BetterVoiceMeeter log"));
         juce::Logger::setCurrentLogger (logger.get());
         engine = std::make_unique<Engine>();
+        theme::apply (theme::styleFromName (engine->uiTheme));
         window = std::make_unique<MainWindow> (*engine);
         handleCommandLine (commandLine);
     }
@@ -29,6 +30,11 @@ public:
     void handleCommandLine (const juce::String& commandLine)
     {
         auto args = juce::StringArray::fromTokens (commandLine, true);
+        if (const int t = args.indexOf ("--theme"); t >= 0 && t + 1 < args.size() && engine != nullptr && engine->onThemeChanged)
+        {
+            engine->uiTheme = args[t + 1].unquoted();
+            engine->onThemeChanged();
+        }
         if (args.contains ("--apps") && window != nullptr)
             if (auto* mc = dynamic_cast<MainComponent*> (window->getContentComponent()))
                 mc->toggleAppMixer();
@@ -54,10 +60,19 @@ private:
     {
     public:
         explicit MainWindow (Engine& e)
-            : DocumentWindow ("BetterVoiceMeeter", juce::Colour (0xff1b1e24), DocumentWindow::allButtons)
+            : DocumentWindow ("BetterVoiceMeeter", theme::bg, DocumentWindow::allButtons)
         {
             setUsingNativeTitleBar (true);
             setContentOwned (new MainComponent (e), true);
+            e.onThemeChanged = [this, &e]
+            {
+                theme::apply (theme::styleFromName (e.uiTheme));
+                e.saveState();
+                setBackgroundColour (theme::bg);
+                const auto bounds = getBounds();
+                setContentOwned (new MainComponent (e), false); // rebuild every component with the new palette
+                setBounds (bounds);
+            };
             setResizable (true, false);
             setResizeLimits (900, 640, 6000, 3000);
             if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())

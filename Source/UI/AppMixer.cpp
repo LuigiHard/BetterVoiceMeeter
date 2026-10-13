@@ -8,7 +8,7 @@ constexpr int stripWidth = 132;
 juce::Colour colourFor (const juce::String& key, int index)
 {
     // Distinct accent per strip from the mixer's palette (by position, so neighbours never match).
-    static const juce::Colour palette[] = { theme::hw, juce::Colour (0xffff5c8a), theme::busA, theme::virt,
+    const juce::Colour palette[] = { theme::hw, juce::Colour (0xffff5c8a), theme::busA, theme::virt,
                                             juce::Colour (0xffa78bfa), theme::busB };
     if (key == "system") return theme::dim;
     return palette[(size_t) index % std::size (palette)];

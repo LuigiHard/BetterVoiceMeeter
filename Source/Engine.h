@@ -77,6 +77,8 @@ public:
     void savePreset (const juce::File&);
 
     std::function<void()> onLayoutChanged; // strips activated/renamed, device changed
+    juce::String uiTheme = "classic";      // "classic" or "focusrite"
+    std::function<void()> onThemeChanged;
 
 private:
     void audioDeviceIOCallbackWithContext (const float* const* in, int numIn, float* const* out, int numOut,

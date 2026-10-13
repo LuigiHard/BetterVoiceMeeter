@@ -95,3 +95,11 @@ target_sources(AppSessionsTest PRIVATE Tests/AppSessionsTest.cpp Source/AppSessi
 target_compile_definitions(AppSessionsTest PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
 target_link_libraries(AppSessionsTest PRIVATE juce::juce_gui_basics
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+
+# Experiment / check for per-app capture: ProcessCaptureTest <pid>
+juce_add_console_app(ProcessCaptureTest PRODUCT_NAME "ProcessCaptureTest")
+juce_generate_juce_header(ProcessCaptureTest)
+target_sources(ProcessCaptureTest PRIVATE Tests/ProcessCaptureTest.cpp Source/ProcessCapture.cpp)
+target_compile_definitions(ProcessCaptureTest PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
+target_link_libraries(ProcessCaptureTest PRIVATE juce::juce_core
+    PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
