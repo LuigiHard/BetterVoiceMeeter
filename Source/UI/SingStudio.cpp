@@ -845,8 +845,10 @@ void SingStudio::showMoisesLogin()
     static const char* snippet =
         "(async()=>{const d=await new Promise(r=>{const q=indexedDB.open('firebaseLocalStorageDb');q.onsuccess=()=>r(q.result)});"
         "const g=d.transaction('firebaseLocalStorage').objectStore('firebaseLocalStorage').getAll();"
-        "g.onsuccess=()=>{const u=g.result.find(x=>x.value&&x.value.stsTokenManager);"
-        "copy(u.value.stsTokenManager.refreshToken);console.log('Moises token copied')}})()";
+        "g.onsuccess=async()=>{const u=g.result.find(x=>x.value&&x.value.stsTokenManager);"
+        "const t=u.value.stsTokenManager.refreshToken;console.log(t);"
+        "try{await navigator.clipboard.writeText(t);console.log('Moises token copied')}"
+        "catch(e){console.log('Copy the long line above')}}})()";
     auto* aw = new juce::AlertWindow ("Moises account",
         "BetterVoiceMeeter uploads songs to your Moises account and downloads the stems and lyrics, the way the\n"
         "studio.moises.ai web app does. This is not an official Moises API: it may stop working if Moises changes\n"
