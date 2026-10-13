@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(BetterVoiceMeeter VERSION 0.1.0 LANGUAGES C CXX)
+project(BetterVoiceMeeter VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,7 +19,13 @@ endif()
 
 juce_add_gui_app(BetterVoiceMeeter
     PRODUCT_NAME "BetterVoiceMeeter"
-    COMPANY_NAME "BetterVoiceMeeter")
+    COMPANY_NAME "BetterVoiceMeeter"
+    VERSION 0.3.0
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Resources/icon-512.png"
+    ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/Resources/icon-64.png")
+
+# Logo for the in-app header.
+juce_add_binary_data(BetterVoiceMeeterData SOURCES Resources/icon-64.png)
 
 juce_generate_juce_header(BetterVoiceMeeter)
 
@@ -51,6 +57,7 @@ target_compile_definitions(BetterVoiceMeeter PRIVATE
 
 target_link_libraries(BetterVoiceMeeter
     PRIVATE
+        BetterVoiceMeeterData
         juce::juce_audio_utils
         juce::juce_dsp
         juce::juce_gui_extra

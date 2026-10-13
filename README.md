@@ -1,10 +1,12 @@
+<p align="center"><img src="Resources/icon-256.png" width="128" alt="BetterVoiceMeeter logo"></p>
+
 # BetterVoiceMeeter
 
 A Voicemeeter-style virtual mixer for Focusrite interfaces (Windows), built with C++ and JUCE 9.
 It runs directly on the **Focusrite USB ASIO** driver, so a signal going hardware in → processing → hardware out costs only one driver buffer (about 9 ms round trip at 48 kHz / 64 samples).
 
 ## Download
-Grab `BetterVoiceMeeter-v0.1.0-win64.zip` from the [Releases](../../releases) page, extract it, and run `BetterVoiceMeeter.exe`.
+Grab the latest `BetterVoiceMeeter-v*-win64.zip` from the [Releases](../../releases) page, extract it, and run `BetterVoiceMeeter.exe`.
 Requires a Focusrite interface with the Focusrite USB ASIO driver installed. Optional: [VB-Cable](https://vb-audio.com/Cable/) for the virtual outputs.
 
 ## Features
@@ -25,9 +27,18 @@ Requires a Focusrite interface with the Focusrite USB ASIO driver installed. Opt
 - **Sing Studio** (header → SING STUDIO): Moises-style song separation and karaoke inside the mixer
   - Search YouTube, click a song, and it's split into **lead vocal, backing vocals / ad-libs, drums, bass, instruments**
   - Per-stem volume (0–150%), mute, and solo; the song plays through the mixer (route it to A1, plus B1 to stream)
-  - Synced karaoke lyrics (LRCLIB, or Music.AI transcription), with a timing nudge
-  - Engines: **Local GPU** (free: BS-RoFormer + MelBand-RoFormer karaoke + HTDemucs; ~3 GB install via the in-app button)
-    or **Music.AI cloud** (your API key + workflow ID; billed by Music.AI per minute)
+  - Synced karaoke lyrics with word-by-word highlighting. Order: LRCLIB synced lyrics, then LRCLIB text synced to the
+    recording with AI (forced alignment), then the engine's own lyrics, then AI transcription (Whisper).
+    **FIND LYRICS** re-searches with an edited artist/title.
+  - Engines:
+    - **Moises (your account)**: about 1 minute per song using your Moises plan. Log in under **ACCOUNT…**
+      (email/password, or a session token for Google/Apple sign-in). This uses Moises's web API, not an official one:
+      it may break when Moises changes its site, and automated use may go against Moises's terms.
+    - **Local GPU** (free, private, offline): BS-RoFormer + MelBand-RoFormer karaoke + HTDemucs, about 5 min per song
+      on a GTX 1070. Installed with the in-app button (~3 GB).
+    - **Music.AI cloud**: your Music.AI API key + workflow ID (billed per minute by Music.AI)
+  - YouTube sometimes requires a login for downloads: log in to YouTube in Firefox, or import a `cookies.txt`
+    (exported with "Get cookies.txt LOCALLY") under **ACCOUNT… → Import YouTube cookies.txt…**
   - Processed songs are kept in a library (`%APPDATA%\BetterVoiceMeeter\Songs`)
   - Downloading from YouTube is against YouTube's terms; use it for personal practice only
 - **2 virtual input strips:** capture any Windows recording device through WASAPI

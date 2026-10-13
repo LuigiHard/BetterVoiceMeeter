@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 #include "Widgets.h"
 #include "SingStudio.h"
+#include <BinaryData.h>
 
 namespace
 {
@@ -1191,7 +1192,10 @@ void MainComponent::paint (juce::Graphics& g)
     g.setColour (theme::border);
     g.drawHorizontalLine (h.getBottom() - 1, 0.0f, (float) getWidth());
 
-    auto titleArea = h.removeFromLeft (300).reduced (14, 0);
+    auto titleArea = h.removeFromLeft (340).reduced (14, 0);
+    static const auto logo = juce::ImageCache::getFromMemory (BinaryData::icon64_png, BinaryData::icon64_pngSize);
+    g.drawImage (logo, titleArea.removeFromLeft (30).withSizeKeepingCentre (30, 30).toFloat(), juce::RectanglePlacement::centred);
+    titleArea.removeFromLeft (10);
     g.setFont (theme::font (20.0f, true));
     g.setColour (theme::text);
     g.drawText ("BETTER", titleArea, juce::Justification::centredLeft);
