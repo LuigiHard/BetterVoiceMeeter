@@ -8,6 +8,7 @@ class BusComponent;
 class FxReturnComponent;
 class DetailPanel;
 class PluginWindow;
+class SingStudio;
 
 class MainComponent : public juce::Component, private juce::Timer
 {
@@ -26,6 +27,7 @@ public:
     void openPluginEditor (juce::AudioPluginInstance*);
     void closePluginEditor (juce::AudioProcessor*);
     void openPluginManager();
+    void toggleSingStudio();
 
 private:
     void timerCallback() override;
@@ -36,7 +38,7 @@ private:
     Engine& engine;
     BvmLookAndFeel lnf;
 
-    juce::TextButton setupButton { "AUDIO SETUP" }, autoButton { "AUTO-ASSIGN" },
+    juce::TextButton singButton { "SING STUDIO" }, setupButton { "AUDIO SETUP" }, autoButton { "AUTO-ASSIGN" },
         loadButton { "LOAD" }, saveButton { "SAVE" };
     juce::String statusText;
 
@@ -49,6 +51,7 @@ private:
     int detailStrip = -1;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::OwnedArray<PluginWindow> pluginWindows;
+    std::unique_ptr<SingStudio> singStudio; // kept alive while hidden so processing continues
 
     juce::Rectangle<int> headerArea, masterArea, fxArea;
     juce::TooltipWindow tooltips { this };

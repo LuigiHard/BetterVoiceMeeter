@@ -5,6 +5,7 @@
 #include "ExternalBridge.h"
 #include "Repair.h"
 #include "InsertChain.h"
+#include "SongPlayer.h"
 
 // The mixing engine: runs inside the ASIO callback of the Focusrite (or whichever
 // device is selected), so hardware in -> processing -> hardware out costs exactly one
@@ -42,6 +43,17 @@ public:
     void removePlugin (InsertChain&, int slot);
     std::function<void (juce::AudioProcessor*)> onPluginRemoved; // UI closes the editor window
     static juce::File getDataDir();
+
+    // Sing Studio: separated-song player mixed in like an input.
+    SongPlayer songPlayer;
+    SongParams song;
+    Meter songMeter;
+    struct SingSettings
+    {
+        juce::String engine = "local", musicaiKey, musicaiWorkflow;
+        int stems = 5;
+    } sing;
+    static juce::File getSongsDir() { return getDataDir().getChildFile ("Songs"); }
 
     // Noise repair status for the UI.
     std::array<std::atomic<int>, kNumStrips> denoiseStatus {};
@@ -112,6 +124,7 @@ private:
     juce::Reverb reverb;
     bvm::StereoDelay delay;
     std::array<juce::SmoothedValue<float>, kNumFx> fxGain;
+    juce::SmoothedValue<float> songGain;
 
     juce::AudioBuffer<float> stripBuf, busBuf, fxBuf;
     std::vector<int> inputMap, outputMap; // physical channel -> callback channel index (-1 if inactive)

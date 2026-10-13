@@ -22,6 +22,14 @@ Requires a Focusrite interface with the Focusrite USB ASIO driver installed. Opt
     Learned profiles are saved.
 - **VST3 plugin inserts:** 4 slots per input strip (pre-fader) and per bus (bus **FX** button).
   Scan plugins under **Audio Setup → Scan / Manage VST3 Plugins**. Plugin state is saved with the mix.
+- **Sing Studio** (header → SING STUDIO): Moises-style song separation and karaoke inside the mixer
+  - Search YouTube, click a song, and it's split into **lead vocal, backing vocals / ad-libs, drums, bass, instruments**
+  - Per-stem volume (0–150%), mute, and solo; the song plays through the mixer (route it to A1, plus B1 to stream)
+  - Synced karaoke lyrics (LRCLIB, or Music.AI transcription), with a timing nudge
+  - Engines: **Local GPU** (free: BS-RoFormer + MelBand-RoFormer karaoke + HTDemucs; ~3 GB install via the in-app button)
+    or **Music.AI cloud** (your API key + workflow ID; billed by Music.AI per minute)
+  - Processed songs are kept in a library (`%APPDATA%\BetterVoiceMeeter\Songs`)
+  - Downloading from YouTube is against YouTube's terms; use it for personal practice only
 - **2 virtual input strips:** capture any Windows recording device through WASAPI
 - **FX returns:** Reverb and stereo ping-pong Delay, each with its own bus routing
 - **Master section**

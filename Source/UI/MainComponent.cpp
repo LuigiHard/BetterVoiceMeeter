@@ -1,5 +1,6 @@
 #include "MainComponent.h"
 #include "Widgets.h"
+#include "SingStudio.h"
 
 namespace
 {
@@ -1086,8 +1087,12 @@ MainComponent::MainComponent (Engine& e) : engine (e)
     setLookAndFeel (&lnf);
     juce::LookAndFeel::setDefaultLookAndFeel (&lnf);
 
-    for (auto* b : { &setupButton, &autoButton, &loadButton, &saveButton })
+    for (auto* b : { &singButton, &setupButton, &autoButton, &loadButton, &saveButton })
         addAndMakeVisible (b);
+    singButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xffff5c8a).withAlpha (0.25f));
+    singButton.setColour (juce::TextButton::textColourOffId, theme::text);
+    singButton.setTooltip ("Separate any song into lead vocal / backing vocals / instruments and sing along with synced lyrics");
+    singButton.onClick = [this] { toggleSingStudio(); };
     setupButton.onClick = [this] { openSettings(); };
     autoButton.onClick = [this] { engine.autoAssignStrips(); };
     autoButton.setTooltip ("Create one strip per interface input (pairs Loopback channels into a stereo strip)");
@@ -1110,6 +1115,7 @@ MainComponent::~MainComponent()
 {
     engine.onLayoutChanged = nullptr;
     engine.onPluginRemoved = nullptr;
+    singStudio.reset();
     pluginWindows.clear();
     detail.reset();
     juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
@@ -1191,7 +1197,7 @@ void MainComponent::paint (juce::Graphics& g)
 
     g.setFont (theme::font (12.0f));
     g.setColour (theme::dim);
-    g.drawText (statusText, h.withTrimmedRight (450), juce::Justification::centred);
+    g.drawText (statusText, h.withTrimmedRight (580), juce::Justification::centred);
 
     g.setFont (theme::font (11.0f, true));
     g.setColour (theme::dim);
@@ -1209,9 +1215,9 @@ void MainComponent::resized()
     headerArea = r.removeFromTop (headerHeight);
     {
         auto h = headerArea.reduced (8, 9);
-        for (auto* b : { &saveButton, &loadButton, &autoButton, &setupButton })
+        for (auto* b : { &saveButton, &loadButton, &autoButton, &setupButton, &singButton })
         {
-            b->setBounds (h.removeFromRight (b == &autoButton || b == &setupButton ? 120 : 70));
+            b->setBounds (h.removeFromRight (b == &saveButton || b == &loadButton ? 70 : 120));
             h.removeFromRight (6);
         }
     }
@@ -1239,6 +1245,23 @@ void MainComponent::resized()
 
     if (detail != nullptr)
         detail->setBounds (getLocalBounds().withTrimmedTop (headerHeight));
+    if (singStudio != nullptr)
+        singStudio->setBounds (getLocalBounds().withTrimmedTop (headerHeight));
+}
+
+void MainComponent::toggleSingStudio()
+{
+    if (singStudio == nullptr)
+    {
+        singStudio = std::make_unique<SingStudio> (engine, [this] { toggleSingStudio(); });
+        addChildComponent (*singStudio);
+        singStudio->setBounds (getLocalBounds().withTrimmedTop (headerHeight));
+    }
+    const bool show = ! singStudio->isVisible();
+    if (show) closeDetail();
+    singStudio->setVisible (show);
+    singStudio->toFront (show);
+    singButton.setButtonText (show ? "MIXER" : "SING STUDIO");
 }
 
 void MainComponent::openPluginEditor (juce::AudioPluginInstance* plugin)

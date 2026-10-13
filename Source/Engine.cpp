@@ -336,6 +336,8 @@ void Engine::audioDeviceAboutToStart (juce::AudioIODevice* d)
         for (int c = 0; c < 2; ++c) { b.low[c].reset(); b.mid[c].reset(); b.high[c].reset(); }
     }
     for (auto& g : fxGain) g.reset (sr, 0.02);
+    songGain.reset (sr, 0.02);
+    songPlayer.prepare (sr);
 
     for (auto& c : stripInserts) c.prepare (sr, d->getCurrentBufferSizeSamples());
     for (auto& c : busInserts)   c.prepare (sr, d->getCurrentBufferSizeSamples());
@@ -584,6 +586,29 @@ void Engine::audioDeviceIOCallbackWithContext (const float* const* in, int numIn
             for (int i = 0; i < n; ++i) { const float g = st.sendDly.getNextValue(); dl[i] += sl[i] * g; dr[i] += sr[i] * g; }
     }
 
+    // Sing Studio song player (strip buffers are free again at this point).
+    if (songPlayer.isLoaded())
+    {
+        songPlayer.render (sl, sr, n);
+        songGain.setTargetValue (song.mute->on() ? 0.0f : bvm::dbToGain (song.gain->get()));
+        float pl = 0, pr = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            const float g = songGain.getNextValue();
+            sl[i] *= g;
+            sr[i] *= g;
+            pl = juce::jmax (pl, std::abs (sl[i]));
+            pr = juce::jmax (pr, std::abs (sr[i]));
+        }
+        songMeter.push (pl, pr);
+        for (int b = 0; b < kNumBuses; ++b)
+            if (song.routes[(size_t) b]->on())
+            {
+                busBuf.addFrom (b * 2, 0, sl, n);
+                busBuf.addFrom (b * 2 + 1, 0, sr, n);
+            }
+    }
+
     // FX returns.
     {
         auto& rp = *fx[0];
@@ -781,6 +806,16 @@ std::unique_ptr<juce::XmlElement> Engine::createStateXml (bool includeDevice) co
     }
     for (auto& f : fx)    f->saveTo (*xml->createNewChildElement ("FX"));
 
+    {
+        auto* e = xml->createNewChildElement ("SING");
+        song.saveTo (*e);
+        e->setAttribute ("engine", sing.engine);
+        e->setAttribute ("stems", sing.stems);
+        e->setAttribute ("musicaiWorkflow", sing.musicaiWorkflow);
+        if (includeDevice) // the API key stays in the local settings file, never in shared presets
+            e->setAttribute ("musicaiKey", sing.musicaiKey);
+    }
+
     auto* v = xml->createNewChildElement ("VIRTUAL");
     for (int i = 0; i < kNumVirtBuses; ++i)  v->setAttribute ("out" + juce::String (i), outBridgeNames[(size_t) i]);
     for (int i = 0; i < kNumVirtStrips; ++i) v->setAttribute ("in" + juce::String (i), inBridgeNames[(size_t) i]);
@@ -822,6 +857,16 @@ void Engine::restoreStateXml (const juce::XmlElement& xml, bool includeDevice)
     i = 0;
     for (auto* e : xml.getChildWithTagNameIterator ("FX"))
         if (i < kNumFx) fx[(size_t) i++]->loadFrom (*e);
+
+    if (auto* e = xml.getChildByName ("SING"))
+    {
+        song.loadFrom (*e);
+        sing.engine = e->getStringAttribute ("engine", sing.engine);
+        sing.stems = e->getIntAttribute ("stems", sing.stems);
+        sing.musicaiWorkflow = e->getStringAttribute ("musicaiWorkflow", sing.musicaiWorkflow);
+        if (e->hasAttribute ("musicaiKey"))
+            sing.musicaiKey = e->getStringAttribute ("musicaiKey");
+    }
 
     if (auto* v = xml.getChildByName ("VIRTUAL"))
     {

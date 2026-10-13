@@ -28,9 +28,16 @@ target_sources(BetterVoiceMeeter PRIVATE
     Source/Engine.cpp
     Source/ExternalBridge.cpp
     Source/InsertChain.cpp
+    Source/SongPlayer.cpp
+    Source/UI/SingStudio.cpp
     Source/UI/MainComponent.cpp)
 
 target_include_directories(BetterVoiceMeeter PRIVATE Source)
+
+# Sing Studio's Python stem worker lives next to the exe.
+add_custom_command(TARGET BetterVoiceMeeter POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/Tools/stemworker" "$<TARGET_FILE_DIR:BetterVoiceMeeter>/stemworker")
 
 target_compile_definitions(BetterVoiceMeeter PRIVATE
     JUCE_ASIO=1

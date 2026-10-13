@@ -207,6 +207,26 @@ struct FxParams : ParamGroup
     std::array<std::unique_ptr<Param>, kNumBuses> routes;
 };
 
+// The Sing Studio song player as a mixer source.
+struct SongParams : ParamGroup
+{
+    SongParams()
+    {
+        gain = std::make_unique<Param> ("song_gain", -60.0f, 12.0f, 0.0f, -12.0f);
+        mute = std::make_unique<Param> ("song_mute", 0.0f, 1.0f, 0.0f);
+        add (*gain);
+        add (*mute);
+        for (int b = 0; b < kNumBuses; ++b)
+        {
+            routes[(size_t) b] = std::make_unique<Param> ("song_bus" + juce::String (b), 0.0f, 1.0f, b == 0 ? 1.0f : 0.0f);
+            add (*routes[(size_t) b]);
+        }
+    }
+
+    std::unique_ptr<Param> gain, mute;
+    std::array<std::unique_ptr<Param>, kNumBuses> routes;
+};
+
 // Atomic stereo meter written by the audio thread, read (and decayed) by the UI.
 struct Meter
 {
