@@ -516,6 +516,8 @@ SingStudio::SingStudio (Engine& e, std::function<void()> closeFn) : engine (e), 
     fwdBtn.onClick = [this] { engine.songPlayer.seek (engine.songPlayer.getPosition() + 5.0); };
     offsetDown.onClick = [this] { lyrics->nudge (-0.25); };
     offsetUp.onClick = [this] { lyrics->nudge (0.25); };
+    findLyricsBtn.onClick = [this] { findLyrics(); };
+    findLyricsBtn.setTooltip ("Search the lyrics again (edit artist / title) and sync them to this recording with AI if needed");
     offsetDown.setTooltip ("Lyrics are late? Show them earlier");
     offsetUp.setTooltip ("Lyrics are early? Show them later");
 
@@ -531,7 +533,7 @@ SingStudio::SingStudio (Engine& e, std::function<void()> closeFn) : engine (e), 
                                 (juce::Component*) &settingsBtn, (juce::Component*) &closeBtn, (juce::Component*) &resultsTab,
                                 (juce::Component*) &libraryTab, (juce::Component*) &playBtn, (juce::Component*) &backBtn,
                                 (juce::Component*) &fwdBtn, (juce::Component*) &positionSlider, (juce::Component*) &offsetDown,
-                                (juce::Component*) &offsetUp })
+                                (juce::Component*) &offsetUp, (juce::Component*) &findLyricsBtn })
         addAndMakeVisible (c);
     addChildComponent (installBtn);
     addChildComponent (cancelBtn);
@@ -579,6 +581,16 @@ SingStudio::SingStudio (Engine& e, std::function<void()> closeFn) : engine (e), 
     {
         if (v["type"] == "progress")
             setBusy (true, v["message"].toString(), (double) v["pct"]);
+        else if (v["type"] == "done" && lyricsJob)
+        {
+            lyricsJob = false;
+            const juce::File dir (v["dir"].toString());
+            if (dir == currentSong)
+                lyrics->load (dir.getChildFile ("lyrics.json"));
+            setBusy (false, "Lyrics: " + v["meta"]["lyrics"].toString());
+            refreshLibrary();
+            showLibrary (showingLibrary);
+        }
         else if (v["type"] == "done")
         {
             setBusy (false, "Ready");
@@ -588,10 +600,14 @@ SingStudio::SingStudio (Engine& e, std::function<void()> closeFn) : engine (e), 
             showLibrary (showingLibrary);
         }
         else if (v["type"] == "error")
+        {
+            lyricsJob = false;
             setBusy (false, "Error: " + v["message"].toString());
+        }
     };
     processWorker->onFinished = [this] (int code, const juce::String& tail)
     {
+        lyricsJob = false;
         if (busy) // ended without "done"/"error" (crash)
             setBusy (false, code == -1 ? "Cancelled" : "Processing stopped. " + tail.fromLastOccurrenceOf ("\n", false, false));
     };
@@ -772,6 +788,50 @@ void SingStudio::showMusicAiSettings()
     }), false);
 }
 
+void SingStudio::findLyrics()
+{
+    if (! currentSong.isDirectory())
+    {
+        statusText = "Load a song first.";
+        repaint();
+        return;
+    }
+    if (busy)
+    {
+        statusText = "Busy - wait for the current job or press CANCEL.";
+        repaint();
+        return;
+    }
+    const auto meta = readJson (currentSong.getChildFile ("meta.json"));
+    auto* aw = new juce::AlertWindow ("Find lyrics",
+                                      "Lyrics are searched on LRCLIB. If none are synced to this recording, the AI times\n"
+                                      "each word against the isolated vocal. If nothing is found online, the vocal is transcribed.",
+                                      juce::MessageBoxIconType::NoIcon, this);
+    aw->addTextEditor ("artist", meta["artist"].toString(), "Artist:");
+    aw->addTextEditor ("title", meta["track"].toString(), "Song title:");
+    aw->addComboBox ("mode", { "Use online timing when it matches this recording",
+                               "Always re-sync to this recording with AI" }, "Timing:");
+    aw->addButton ("SEARCH", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    aw->addButton ("CANCEL", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    aw->enterModalState (true, juce::ModalCallbackFunction::create ([this, aw] (int result)
+    {
+        std::unique_ptr<juce::AlertWindow> owner (aw);
+        if (result != 1) return;
+        juce::StringArray args { getPython().getFullPathName(), "-u", getWorkerScript().getFullPathName(), "lyrics",
+                                 currentSong.getFullPathName(), "--artist", aw->getTextEditorContents ("artist").trim(),
+                                 "--title", aw->getTextEditorContents ("title").trim() };
+        if (aw->getComboBoxComponent ("mode")->getSelectedItemIndex() == 1)
+            args.add ("--resync");
+        lyricsJob = true;
+        setBusy (true, "Searching lyrics...", 0.9);
+        if (! processWorker->start (args))
+        {
+            lyricsJob = false;
+            setBusy (false, "Could not start the stem worker (Python)");
+        }
+    }), false);
+}
+
 void SingStudio::installEngine()
 {
     const auto setup = getWorkerScript().getSiblingFile ("setup.ps1");
@@ -858,7 +918,8 @@ void SingStudio::paint (juce::Graphics& g)
         g.setFont (theme::font (11.0f, true));
         auto src = lyrics->getSource();
         g.drawText ("LYRICS" + (src.isNotEmpty() ? "  (" + src + ")" : juce::String()), hdr, juce::Justification::centredLeft);
-        g.drawText ("timing " + juce::String (lyrics->getOffset(), 2) + " s", hdr.withTrimmedRight (64), juce::Justification::centredRight);
+        g.drawText ("timing " + juce::String (lyrics->getOffset(), 2) + " s", hdr.withTrimmedRight (64).withTrimmedLeft (hdr.getWidth() - 214),
+                    juce::Justification::centredRight);
     }
 
     // Status / progress
@@ -958,4 +1019,6 @@ void SingStudio::resized()
     auto hdr = lyricsArea.withHeight (24).translated (0, -26);
     offsetUp.setBounds (hdr.removeFromRight (28).reduced (1));
     offsetDown.setBounds (hdr.removeFromRight (28).reduced (1));
+    hdr.removeFromRight (150);
+    findLyricsBtn.setBounds (hdr.removeFromRight (110).reduced (1));
 }

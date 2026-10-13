@@ -342,7 +342,8 @@ def parse_lrc(text: str) -> list[dict]:
     return [l for l in lines if l["text"]]
 
 
-def lrclib(artist: str, title: str, duration: float) -> tuple[list[dict], str] | None:
+def lrclib_candidates(artist: str, title: str, duration: float) -> list[dict]:
+    """All LRCLIB entries that might be this song (exact match first, then searches)."""
     def get(path: str, params: dict):
         url = f"https://lrclib.net/api/{path}?{urllib.parse.urlencode(params)}"
         try:
@@ -350,18 +351,291 @@ def lrclib(artist: str, title: str, duration: float) -> tuple[list[dict], str] |
         except Exception:  # noqa: BLE001 - not found / network: try the next strategy
             return None
 
-    exact = get("get", {"artist_name": artist, "track_name": title, "duration": int(round(duration))}) if artist else None
-    if exact and exact.get("syncedLyrics"):
-        return parse_lrc(exact["syncedLyrics"]), "LRCLIB"
-    found = get("search", {"q": f"{artist} {title}".strip()}) or []
-    synced = [r for r in found if r.get("syncedLyrics")]
-    if not synced:
-        return None
-    # Prefer the version whose length matches this recording (YouTube intros/outros shift timing).
-    best = min(synced, key=lambda r: abs((r.get("duration") or 0) - duration))
-    if duration and abs((best.get("duration") or 0) - duration) > 15:
-        return None
-    return parse_lrc(best["syncedLyrics"]), "LRCLIB"
+    found, seen = [], set()
+    def add(r):
+        if isinstance(r, dict) and r.get("id") not in seen and (r.get("syncedLyrics") or r.get("plainLyrics")):
+            seen.add(r.get("id"))
+            found.append(r)
+
+    if artist and title:
+        add(get("get", {"artist_name": artist, "track_name": title, "duration": int(round(duration))}))
+        for r in get("search", {"artist_name": artist, "track_name": title}) or []:
+            add(r)
+    for r in get("search", {"q": f"{artist} {title}".strip()}) or []:
+        add(r)
+    if title:
+        for r in get("search", {"track_name": title}) or []:
+            add(r)
+    return found
+
+
+def plain_lines(r: dict) -> list[str]:
+    text = r.get("plainLyrics") or re.sub(r"\[[^\]]*\]", "", r.get("syncedLyrics") or "")
+    return [l.strip() for l in text.splitlines() if l.strip()]
+
+
+# ---------------------------------------------------------------- AI sync (Whisper on the lead vocal)
+WHISPER_ALIGN_MODEL = "small"   # enough to time known lyrics
+WHISPER_TRANSCRIBE_MODEL = "medium"  # used when there are no lyrics at all
+
+
+def whisper_words(audio: Path, model_name: str, prompt: str = "", language: str | None = None) -> tuple[list[dict], str]:
+    import torch
+    import whisper
+
+    ffmpeg_on_path()
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = whisper.load_model(model_name, device=device, download_root=str(MODELS_DIR / "whisper"))
+    result = model.transcribe(
+        str(audio), word_timestamps=True, verbose=False, language=language,
+        fp16=False,  # GTX 10-series (Pascal) is slow at fp16
+        initial_prompt=prompt[:600] or None, condition_on_previous_text=False)
+    words = [{"w": w["word"].strip(), "t": float(w["start"]), "end": float(w["end"])}
+             for seg in result.get("segments", []) for w in seg.get("words", []) if w["word"].strip()]
+    return words, result.get("language", "")
+
+
+def norm_token(w: str) -> str:
+    import unicodedata
+
+    w = unicodedata.normalize("NFKD", w.lower())
+    return "".join(c for c in w if c.isalnum())
+
+
+def align_lines(lines: list[str], heard: list[dict]) -> tuple[list[dict], float]:
+    """Give each known lyric word the time Whisper heard it; interpolate the words it missed."""
+    import difflib
+
+    tokens = []  # (line index, display word, normalised)
+    for li, line in enumerate(lines):
+        for w in line.split():
+            n = norm_token(w)
+            if n:
+                tokens.append([li, w, n, None, None])
+    heard_norm = [norm_token(h["w"]) for h in heard]
+    sm = difflib.SequenceMatcher(None, [t[2] for t in tokens], heard_norm, autojunk=False)
+    matched = 0
+    for block in sm.get_matching_blocks():
+        for k in range(block.size):
+            t, h = tokens[block.a + k], heard[block.b + k]
+            t[3], t[4] = h["t"], h["end"]
+            matched += 1
+    # Fuzzy pass: pair up remaining words inside unmatched gaps when they sound alike.
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "replace":
+            for k in range(min(i2 - i1, j2 - j1)):
+                if difflib.SequenceMatcher(None, tokens[i1 + k][2], heard_norm[j1 + k]).ratio() >= 0.6:
+                    tokens[i1 + k][3], tokens[i1 + k][4] = heard[j1 + k]["t"], heard[j1 + k]["end"]
+                    matched += 1
+
+    # Interpolate missing times between known neighbours.
+    known = [i for i, t in enumerate(tokens) if t[3] is not None]
+    if not known:
+        return [], 0.0
+    for i, t in enumerate(tokens):
+        if t[3] is not None:
+            continue
+        prev = max((k for k in known if k < i), default=None)
+        nxt = min((k for k in known if k > i), default=None)
+        if prev is None:
+            t[3] = max(0.0, tokens[nxt][3] - 0.4 * (nxt - i)); t[4] = t[3] + 0.3
+        elif nxt is None:
+            t[3] = tokens[prev][4] + 0.35 * (i - prev - 1); t[4] = t[3] + 0.3
+        else:
+            span = (tokens[nxt][3] - tokens[prev][4]) / (nxt - prev)
+            t[3] = tokens[prev][4] + span * (i - prev - 1) + 0.01
+            t[4] = t[3] + max(0.1, span * 0.8)
+
+    out = []
+    for li, line in enumerate(lines):
+        ws = [t for t in tokens if t[0] == li]
+        if not ws:
+            continue
+        words = [{"t": round(t[3], 3), "end": round(t[4], 3), "w": t[1]} for t in ws]
+        out.append({"t": words[0]["t"], "end": words[-1]["end"], "text": line, "words": words})
+    out.sort(key=lambda l: l["t"])
+    return out, matched / max(1, len(tokens))
+
+
+def vocal_track(song_dir: Path) -> Path:
+    """Lead + backing vocals combined: ad-libs in the lyric text then have a voice to align to."""
+    import numpy as np
+    import soundfile as sf
+
+    parts = [song_dir / f"{s}.wav" for s in ("lead", "backing", "vocals") if (song_dir / f"{s}.wav").exists()]
+    if not parts:
+        return song_dir / "source.wav"
+    mix, sr = sf.read(str(parts[0]), dtype="float32", always_2d=True)
+    for extra in parts[1:]:
+        b, _ = sf.read(str(extra), dtype="float32", always_2d=True)
+        n = min(len(mix), len(b))
+        mix[:n] += b[:n]
+    out = song_dir / "align_vocals.wav"
+    sf.write(str(out), mix, sr, subtype="FLOAT")
+    return out
+
+
+def forced_align(audio: Path, lines: list[str]) -> tuple[list[dict], float]:
+    """CTC forced alignment (torchaudio MMS_FA, multilingual): walks the known lyrics through the
+    audio in order, so every word gets a time and repeated choruses can't be mixed up."""
+    import numpy as np
+    import soundfile as sf
+    import torch
+    import torchaudio
+    import torchaudio.functional as F
+
+    os.environ.setdefault("TORCH_HOME", str(MODELS_DIR / "torch"))
+    bundle = torchaudio.pipelines.MMS_FA
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # The "star" wildcard token soaks up sung sounds that aren't in the lyric text
+    # (oohs, breaths, ad-libs), so they don't drag the real words out of place.
+    model = bundle.get_model(with_star=True).to(device).eval()
+    vocab = bundle.get_dict(star="*")
+
+    wav, sr = sf.read(str(audio), dtype="float32", always_2d=True)
+    wave = torch.from_numpy(wav.mean(axis=1)).unsqueeze(0)
+    wave = F.resample(wave, sr, bundle.sample_rate)
+
+    # Emissions in 30 s chunks (whole-song attention would not fit in 8 GB).
+    chunk = bundle.sample_rate * 30
+    emissions = []
+    with torch.inference_mode():
+        for i in range(0, wave.shape[1], chunk):
+            part = wave[:, i:i + chunk]
+            if part.shape[1] < 400:
+                continue
+            em, _ = model(part.to(device))
+            emissions.append(torch.log_softmax(em, dim=-1).cpu())
+            progress("lyrics", 0.94 + 0.04 * min(1.0, (i + chunk) / wave.shape[1]), "Syncing lyrics to the vocal (forced alignment)")
+    emission = torch.cat(emissions, dim=1)
+    sec_per_frame = wave.shape[1] / bundle.sample_rate / emission.shape[1]
+
+    # Words -> romanised letters the aligner knows (accents stripped, e.g. "coração" -> "coracao").
+    words = []  # (line index, display word, tokens)
+    for li, line in enumerate(lines):
+        for w in line.split():
+            letters = "".join(c for c in norm_token(w).replace("0", "o") if c in vocab)
+            if letters:
+                words.append((li, w, [vocab[c] for c in letters]))
+    if not words:
+        return [], 0.0
+    star = vocab["*"]
+    flat, word_pos, prev_line = [star], [], words[0][0]
+    for li, w, toks in words:
+        if li != prev_line:
+            flat.append(star)  # wildcard between lyric lines
+            prev_line = li
+        word_pos.append(len(flat))
+        flat.extend(toks)
+    flat.append(star)
+    targets = torch.tensor([flat], dtype=torch.int32)
+    if targets.shape[1] >= emission.shape[1]:
+        return [], 0.0
+    ali, scores = F.forced_align(emission, targets, blank=0)
+    spans = F.merge_tokens(ali[0], scores[0].exp())
+
+    out, conf = {}, []
+    for (li, w, toks), k in zip(words, word_pos):
+        ws = spans[k:k + len(toks)]
+        t0, t1 = ws[0].start * sec_per_frame, ws[-1].end * sec_per_frame
+        conf.append(float(np.mean([s.score for s in ws])))
+        out.setdefault(li, []).append({"t": round(t0, 3), "end": round(t1, 3), "w": w})
+    result = [{"t": ws[0]["t"], "end": ws[-1]["end"], "text": lines[li], "words": ws} for li, ws in sorted(out.items())]
+    return result, float(np.mean(conf))
+
+
+def add_word_timing(lrc: list[dict], aligned: list[dict]) -> list[dict]:
+    """Merge AI word times into LRCLIB lines: LRCLIB's line start is trusted, the AI supplies the
+    rhythm of the words inside the line (anchored to that start, compressed if it would overrun)."""
+    out = []
+    for i, (ref, ai) in enumerate(zip(lrc, aligned)):
+        words = ai["words"]
+        next_t = lrc[i + 1]["t"] if i + 1 < len(lrc) else ref["t"] + 8.0
+        span_ai = max(0.3, words[-1]["end"] - words[0]["t"])
+        if abs(ai["t"] - ref["t"]) > 1.0:
+            span_ai = min(span_ai, 0.35 * len(words) + 0.5)  # AI misplaced this line: don't trust its length
+        span = min(span_ai, max(0.5, next_t - ref["t"] - 0.1))
+        scale = span / max(0.3, words[-1]["end"] - words[0]["t"])
+        words = [{"t": round(ref["t"] + (w["t"] - words[0]["t"]) * scale, 3),
+                  "end": round(ref["t"] + (w["end"] - words[0]["t"]) * scale, 3), "w": w["w"]} for w in words]
+        out.append({"t": ref["t"], "end": ref["end"], "text": ref["text"], "words": words})
+    return out
+
+
+def lines_from_words(words: list[dict], max_words: int = 10, gap: float = 0.6) -> list[dict]:
+    """Group transcribed words into karaoke lines: break at pauses, after sentence punctuation,
+    or before a capitalised word once the line is long enough; never exceed max_words."""
+    lines, cur = [], []
+    for w in words:
+        if cur:
+            pause = w["t"] - cur[-1]["end"] > gap
+            punct = cur[-1]["w"][-1:] in ".?!" or (cur[-1]["w"][-1:] == "," and len(cur) >= 5)
+            new_phrase = w["w"][:1].isupper() and w["w"] not in ("I", "I'm", "I've", "I'll", "I'd") and len(cur) >= 4
+            if pause or punct or new_phrase or len(cur) >= max_words:
+                lines.append(cur); cur = []
+        cur.append(w)
+    if cur:
+        lines.append(cur)
+    return [{"t": l[0]["t"], "end": l[-1]["end"], "text": " ".join(x["w"] for x in l), "words": l} for l in lines]
+
+
+def matches_recording(r: dict, duration: float) -> bool:
+    return bool(r.get("syncedLyrics")) and (not duration or abs((r.get("duration") or 0) - duration) <= 3)
+
+
+def find_lyrics(song_dir: Path, meta: dict, provided=None, resync: bool = False) -> None:
+    """Synced lyrics, best first:
+       1. Music.AI's own transcription (cloud engine)
+       2. LRCLIB synced lyrics whose length matches this recording
+       3. LRCLIB lyrics text (synced for another version, or plain) re-timed with Whisper on the lead vocal
+       4. Whisper transcription of the lead vocal"""
+    lines, source = [], ""
+    if provided:
+        lines, source = musicai_lyrics(provided), "Music.AI"
+
+    if not lines:
+        progress("lyrics", 0.93, "Searching LRCLIB for lyrics")
+        cands = lrclib_candidates(meta.get("artist", ""), meta.get("track", ""), meta.get("duration", 0))
+        exact = [r for r in cands if matches_recording(r, meta.get("duration", 0))]
+        if exact and not resync:
+            lines, source = parse_lrc(exact[0]["syncedLyrics"]), "LRCLIB (synced)"
+            try:  # add word-by-word timing, keeping LRCLIB's trusted line starts
+                progress("lyrics", 0.94, "Adding word-by-word timing")
+                vocals = vocal_track(song_dir)
+                aligned, _ = forced_align(vocals, [l["text"] for l in lines])
+                if len(aligned) == len(lines):
+                    lines, source = add_word_timing(lines, aligned), "LRCLIB (synced) + AI word timing"
+                if vocals.name == "align_vocals.wav":
+                    vocals.unlink(missing_ok=True)
+            except Exception:  # noqa: BLE001 - word timing is a bonus; keep the line timing
+                traceback.print_exc(file=sys.stderr)
+        else:
+            vocals = vocal_track(song_dir)
+            text_cands = exact + [r for r in cands if r not in exact]
+            text = plain_lines(text_cands[0]) if text_cands else []
+            if text:
+                progress("lyrics", 0.94, "Syncing lyrics to the vocal (forced alignment)")
+                lines, conf = forced_align(vocals, text)
+                source = f"LRCLIB + AI sync (confidence {int(conf * 100)}%)"
+            if not lines:
+                progress("lyrics", 0.94, "No lyrics found online: transcribing the vocal with AI (Whisper)")
+                heard, lang = whisper_words(vocals, WHISPER_TRANSCRIBE_MODEL)
+                lines = lines_from_words(heard)
+                if lines:  # tighten Whisper's word times with forced alignment of its own transcript
+                    aligned, _ = forced_align(vocals, [l["text"] for l in lines])
+                    lines = aligned or lines
+                source = f"AI transcription ({lang})" if lines else ""
+            vocals.unlink(missing_ok=True) if vocals.name == "align_vocals.wav" else None
+
+    old_offset = 0.0
+    if (song_dir / "lyrics.json").exists():
+        try:
+            old_offset = json.loads((song_dir / "lyrics.json").read_text(encoding="utf-8")).get("offset", 0.0) if not lines else 0.0
+        except Exception:  # noqa: BLE001
+            pass
+    (song_dir / "lyrics.json").write_text(json.dumps({"source": source, "offset": old_offset, "lines": lines},
+                                                     ensure_ascii=False, indent=1), encoding="utf-8")
+    meta["lyrics"] = source or "none"
 
 
 def musicai_lyrics(value) -> list[dict]:
@@ -378,19 +652,6 @@ def musicai_lyrics(value) -> list[dict]:
                  for w in (it.get("words") or []) if isinstance(w, dict)]
         lines.append({"t": float(start), "end": float(end), "text": text.strip(), **({"words": words} if words else {})})
     return [l for l in lines if l["text"]]
-
-
-def find_lyrics(song_dir: Path, meta: dict, provided=None) -> None:
-    progress("lyrics", 0.93, "Finding synced lyrics")
-    lines, source = [], ""
-    if provided:
-        lines, source = musicai_lyrics(provided), "Music.AI"
-    if not lines:
-        got = lrclib(meta.get("artist", ""), meta.get("track", ""), meta.get("duration", 0))
-        if got:
-            lines, source = got
-    (song_dir / "lyrics.json").write_text(json.dumps({"source": source, "offset": 0.0, "lines": lines}, ensure_ascii=False, indent=1), encoding="utf-8")
-    meta["lyrics"] = source or "none"
 
 
 # --------------------------------------------------------------------------- main commands
@@ -431,8 +692,13 @@ def process(args) -> None:
 def relyrics(args) -> None:
     song_dir = Path(args.dir)
     meta = json.loads((song_dir / "meta.json").read_text(encoding="utf-8"))
-    find_lyrics(song_dir, meta)
+    if args.artist is not None:
+        meta["artist"] = args.artist.strip()
+    if args.title is not None:
+        meta["track"] = args.title.strip()
+    find_lyrics(song_dir, meta, resync=args.resync)
     (song_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+    progress("done", 1.0, f"Lyrics: {meta['lyrics']}")
     emit("done", dir=str(song_dir), meta=meta)
 
 
@@ -448,6 +714,8 @@ def main() -> int:
     pr.add_argument("--musicai-workflow", default="")
     pr.add_argument("--stems", type=int, choices=(3, 5), default=5)
     ly = sub.add_parser("lyrics"); ly.add_argument("dir")
+    ly.add_argument("--artist"); ly.add_argument("--title")
+    ly.add_argument("--resync", action="store_true", help="re-time lyrics to this recording even if LRCLIB has synced ones")
     args = p.parse_args()
     try:
         {"search": search, "process": process, "lyrics": relyrics}[args.cmd](*(

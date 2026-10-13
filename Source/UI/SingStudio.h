@@ -37,6 +37,7 @@ private:
     void refreshLibrary();
     void showLibrary (bool library);
     void showMusicAiSettings();
+    void findLyrics();
     void installEngine();
     void setBusy (bool busy, const juce::String& message = {}, double pct = -1);
     void rebuildStemRows();
@@ -51,7 +52,8 @@ private:
     juce::TextEditor searchBox;
     juce::TextButton searchBtn { "SEARCH" }, resultsTab { "RESULTS" }, libraryTab { "LIBRARY" },
         settingsBtn { "MUSIC.AI..." }, closeBtn { "X" }, installBtn { "INSTALL AI ENGINE" }, cancelBtn { "CANCEL" },
-        playBtn { "PLAY" }, backBtn { "-5s" }, fwdBtn { "+5s" }, offsetDown { "-" }, offsetUp { "+" };
+        playBtn { "PLAY" }, backBtn { "-5s" }, fwdBtn { "+5s" }, offsetDown { "-" }, offsetUp { "+" },
+        findLyricsBtn { "FIND LYRICS" };
     juce::ComboBox engineBox, stemsBox;
     juce::Slider positionSlider;
     std::unique_ptr<ResultList> list;
@@ -66,6 +68,7 @@ private:
     juce::String nowTitle, nowSubtitle, statusText, bannerText;
     double busyPct = -1;
     bool busy = false;
+    bool lyricsJob = false; // the running worker job only refreshes lyrics
 
     juce::Rectangle<int> topBar, listArea, playerArea, nowArea, transportArea, stemsArea, outputArea, lyricsArea,
         statusArea, bannerArea;

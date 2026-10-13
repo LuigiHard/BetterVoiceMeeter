@@ -19,11 +19,11 @@ if ($hasNvidia) {
     Write-Output 'Installing PyTorch (CUDA 12.6)...'
     & $py -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu126
     if ($LASTEXITCODE) { throw 'PyTorch install failed' }
-    & $py -m pip install 'audio-separator[gpu]' audioread yt-dlp static-ffmpeg
+    & $py -m pip install 'audio-separator[gpu]' audioread openai-whisper yt-dlp static-ffmpeg
 } else {
     Write-Output 'No NVIDIA GPU found: installing the CPU version (separation will be slower).'
     & $py -m pip install torch torchaudio
-    & $py -m pip install 'audio-separator[cpu]' audioread yt-dlp static-ffmpeg
+    & $py -m pip install 'audio-separator[cpu]' audioread openai-whisper yt-dlp static-ffmpeg
 }
 if ($LASTEXITCODE) { throw 'Package install failed' }
 
