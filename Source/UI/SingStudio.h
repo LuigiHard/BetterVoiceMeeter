@@ -40,6 +40,10 @@ private:
     void refreshLibrary();
     void showLibrary (bool library);
     void showMusicAiSettings();
+    void showAccountSettings();
+    void showMoisesLogin();
+    void checkMoisesAccount();
+    static juce::File getMoisesTokenFile();
     void findLyrics();
     void installEngine();
     void setBusy (bool busy, const juce::String& message = {}, double pct = -1);
@@ -54,7 +58,7 @@ private:
 
     juce::TextEditor searchBox;
     juce::TextButton searchBtn { "SEARCH" }, resultsTab { "RESULTS" }, libraryTab { "LIBRARY" },
-        settingsBtn { "MUSIC.AI..." }, closeBtn { "X" }, installBtn { "INSTALL AI ENGINE" }, cancelBtn { "CANCEL" },
+        settingsBtn { "ACCOUNT..." }, closeBtn { "X" }, installBtn { "INSTALL AI ENGINE" }, cancelBtn { "CANCEL" },
         playBtn { "PLAY" }, backBtn { "-5s" }, fwdBtn { "+5s" }, offsetDown { "-" }, offsetUp { "+" },
         findLyricsBtn { "FIND LYRICS" };
     juce::ComboBox engineBox, stemsBox;
@@ -63,7 +67,7 @@ private:
     std::unique_ptr<LyricsView> lyrics;
     juce::OwnedArray<StemRow> stemRows;
     std::unique_ptr<juce::Component> outputRow;
-    std::unique_ptr<Worker> searchWorker, processWorker;
+    std::unique_ptr<Worker> searchWorker, processWorker, accountWorker;
 
     std::vector<Item> results, library;
     bool showingLibrary = false;

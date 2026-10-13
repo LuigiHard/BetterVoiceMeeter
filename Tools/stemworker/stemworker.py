@@ -364,6 +364,195 @@ def to_wav(src: Path, dst: Path) -> None:
     subprocess.run([ffmpeg_on_path(), "-y", "-loglevel", "error", "-i", str(src), "-ar", "44100", "-ac", "2", str(dst)], check=True)
 
 
+
+# --------------------------------------------------------------------------- Moises (your account)
+# Uses the same private API as the studio.moises.ai web app, logged in as you. Not an official API:
+# it can change without notice, and automated use may conflict with Moises's terms.
+MOISES_GRAPHQL = "https://api.moises.ai/graphql"
+MOISES_FIREBASE_KEY = "AIzaSyDWcFRZcUnN5EPNNA7jrcuS3HlIvMqtuCs"  # public web config shipped by studio.moises.ai
+MOISES_TOKEN_FILE = Path(os.environ.get("APPDATA", HERE)) / "BetterVoiceMeeter" / "moises-token.txt"
+MOISES_HEADERS = {"Origin": "https://studio.moises.ai", "Referer": "https://studio.moises.ai/",
+                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) BetterVoiceMeeter"}
+
+
+def http_json(url: str, body: dict | None = None, headers: dict | None = None, form: bool = False) -> dict:
+    if form:
+        data = urllib.parse.urlencode(body).encode()
+        h = {"Content-Type": "application/x-www-form-urlencoded"}
+    else:
+        data = json.dumps(body).encode() if body is not None else None
+        h = {"Content-Type": "application/json"}
+    req = urllib.request.Request(url, data=data, headers={**MOISES_HEADERS, **h, **(headers or {})},
+                                 method="POST" if data is not None else "GET")
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace")[:400]
+        raise RuntimeError(f"HTTP {e.code} from {urllib.parse.urlparse(url).netloc}: {detail}") from None
+
+
+def moises_login(email: str, password: str) -> str:
+    """Email + password -> long-lived refresh token (the password itself is never stored)."""
+    r = http_json(f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={MOISES_FIREBASE_KEY}",
+                  {"email": email, "password": password, "returnSecureToken": True})
+    return r["refreshToken"]
+
+
+def moises_id_token(refresh_token: str) -> str:
+    r = http_json(f"https://securetoken.googleapis.com/v1/token?key={MOISES_FIREBASE_KEY}",
+                  {"grant_type": "refresh_token", "refresh_token": refresh_token}, form=True)
+    return r["id_token"]
+
+
+class Moises:
+    def __init__(self, refresh_token: str):
+        self.refresh = refresh_token
+        self.token = moises_id_token(refresh_token)
+        self.token_time = time.time()
+
+    def gql(self, query: str, variables: dict | None = None) -> dict:
+        if time.time() - self.token_time > 45 * 60:  # ID tokens last an hour
+            self.token, self.token_time = moises_id_token(self.refresh), time.time()
+        r = http_json(MOISES_GRAPHQL, {"query": query, "variables": variables or {}},
+                      {"Authorization": self.token, "apollographql-client-name": "connected-shell"})
+        if r.get("errors"):
+            msg = "; ".join(e.get("message", "") for e in r["errors"])
+            if "CREDIT" in msg.upper():
+                raise RuntimeError("Moises: not enough credits on your account for this song")
+            raise RuntimeError(f"Moises: {msg}")
+        return r.get("data") or {}
+
+
+def put_signed(url: str, data: bytes) -> None:
+    """PUT bytes to a signed storage URL exactly like the browser does (no Content-Type)."""
+    import http.client
+
+    u = urllib.parse.urlparse(url)
+    conn = http.client.HTTPSConnection(u.netloc, timeout=600)
+    conn.putrequest("PUT", u.path + ("?" + u.query if u.query else ""), skip_accept_encoding=True)
+    conn.putheader("Content-Length", str(len(data)))
+    conn.endheaders()
+    conn.send(data)
+    resp = conn.getresponse()
+    body = resp.read()
+    if resp.status >= 300:
+        raise RuntimeError(f"Moises upload failed: HTTP {resp.status} {body[:200]!r}")
+
+
+def separate_moises(song_dir: Path, refresh_token: str, five_stems: bool, title: str, duration: float):
+    m = Moises(refresh_token)
+    debug = {}
+
+    progress("upload", 0.16, "Uploading to your Moises account")
+    flac = song_dir / "upload.flac"
+    import subprocess
+    subprocess.run([ffmpeg_on_path(), "-y", "-loglevel", "error", "-i", str(song_dir / "source.wav"), str(flac)], check=True)
+    up = m.gql("""mutation UploadFile($input: String!, $type: FileProvider) {
+        uploadFile(input: $input, type: $type) { signedUrl input tempLocation name provider } }""",
+               {"input": "song.flac", "type": "FILESYSTEM"})["uploadFile"]
+    put_signed(up["signedUrl"], flac.read_bytes())
+    flac.unlink(missing_ok=True)
+
+    stems = ["lead_vocals", "backing_vocals"] + (["drums", "bass"] if five_stems else [])
+    task = m.gql("""mutation CreateTaskV2($file: FileInput, $operations: [OperationInput]) {
+        createTaskV2(file: $file, operations: $operations) }""", {
+        "file": {"provider": "FILESYSTEM", "input": up.get("input") or "song.flac", "tempLocation": up["tempLocation"],
+                 "name": title or "BetterVoiceMeeter song", "duration": duration or None, "type": "AUDIO"},
+        "operations": [{"name": "SEPARATE_CUSTOM", "params": {"stems": stems}},
+                       {"name": "LYRICS_B", "params": {"language": "auto-detect"}}]})["createTaskV2"]
+    track_id = task if isinstance(task, str) else (task or {}).get("id")
+    debug["track_id"] = track_id
+    (song_dir / "moises.json").write_text(json.dumps(debug, indent=1), encoding="utf-8")
+
+    summary_q = """query StudioPlayTrackSummary($id: String!) { track(id: $id) { id
+        summary { v1 { separate { status stems { stem url } } } } } }"""
+    started = time.time()
+    while True:
+        sep = (m.gql(summary_q, {"id": track_id}).get("track") or {}).get("summary", {}).get("v1", {}).get("separate") or {}
+        status = str(sep.get("status") or "").upper()
+        debug["separate"] = sep
+        if sep.get("stems") and status in ("COMPLETED", "SUCCEEDED", "DONE", "FINISHED", ""):
+            break
+        if status in ("FAILED", "ERROR", "CANCELED", "CANCELLED"):
+            raise RuntimeError(f"Moises separation {status.lower()}")
+        if time.time() - started > 1200:
+            raise RuntimeError("Moises took more than 20 minutes; the track is in your Moises library")
+        progress("separate", min(0.85, 0.2 + (time.time() - started) / 300), f"Moises is separating ({status.lower() or 'queued'})")
+        time.sleep(5)
+
+    names = {"lead_vocals": "lead", "backing_vocals": "backing", "drums": "drums", "bass": "bass"}
+    got = []
+    for item in sep["stems"]:
+        stem = names.get(item.get("stem"), "other" if five_stems else "instrumental")
+        if stem in got or not item.get("url"):
+            continue
+        progress("download", 0.87, f"Downloading {stem} from Moises")
+        tmp = song_dir / f"{stem}.download"
+        tmp.write_bytes(fetch(item["url"]))
+        to_wav(tmp, song_dir / f"{stem}.wav")
+        tmp.unlink(missing_ok=True)
+        got.append(stem)
+
+    # Lyrics finish separately; give them a little time.
+    lyrics = None
+    lyrics_q = """query StudioPlayTrackAnalysis($id: String!) { track(id: $id) { id summary { v1 {
+        lyrics { status lyrics { url } lyrics_new_format { url } } } } } }"""
+    for _ in range(36):
+        ly = (m.gql(lyrics_q, {"id": track_id}).get("track") or {}).get("summary", {}).get("v1", {}).get("lyrics") or {}
+        debug["lyrics"] = ly
+        url = (ly.get("lyrics_new_format") or {}).get("url") or (ly.get("lyrics") or {}).get("url")
+        if url:
+            raw = fetch(url)
+            (song_dir / "moises_lyrics.json").write_bytes(raw)
+            try:
+                lyrics = json.loads(raw)
+            except ValueError:
+                lyrics = None
+            break
+        if str(ly.get("status") or "").upper() in ("FAILED", "ERROR"):
+            break
+        progress("lyrics", 0.9, "Waiting for Moises lyrics")
+        time.sleep(5)
+    (song_dir / "moises.json").write_text(json.dumps(debug, indent=1), encoding="utf-8")
+    if not got:
+        raise RuntimeError("Moises returned no stems")
+    order = ["lead", "backing", "drums", "bass", "other", "instrumental"]
+    return sorted(got, key=order.index), lyrics
+
+
+def moises_lyrics(value) -> list[dict]:
+    """Moises lyrics -> our line format. Accepts word lists or line lists in several shapes."""
+    items = value
+    if isinstance(value, dict):
+        items = value.get("lines") or value.get("segments") or value.get("lyrics") or value.get("words") or []
+    if not isinstance(items, list) or not items:
+        return []
+    def num(d, *keys):
+        for k in keys:
+            if isinstance(d.get(k), (int, float)):
+                return float(d[k])
+        return None
+    first = items[0] if isinstance(items[0], dict) else {}
+    word_level = "word" in first or ("text" in first and len(str(first.get("text", "")).split()) <= 1 and "words" not in first)
+    if word_level:
+        words = [{"w": str(it.get("word") or it.get("text") or "").strip(), "t": num(it, "start", "startTime", "time") or 0.0,
+                  "end": num(it, "end", "endTime") or (num(it, "start", "startTime", "time") or 0.0) + 0.3,
+                  "line": it.get("line") if "line" in it else it.get("lineIndex")}
+                 for it in items if isinstance(it, dict)]
+        words = [w for w in words if w["w"]]
+        if words and words[0]["line"] is not None:
+            grouped = {}
+            for w in words:
+                grouped.setdefault(w["line"], []).append(w)
+            lines = list(grouped.values())
+        else:
+            return lines_from_words(words)
+        return [{"t": l[0]["t"], "end": l[-1]["end"], "text": " ".join(x["w"] for x in l),
+                 "words": [{k: x[k] for k in ("w", "t", "end")} for x in l]} for l in lines]
+    return musicai_lyrics(items)
+
+
 # --------------------------------------------------------------------------- lyrics
 def parse_lrc(text: str) -> list[dict]:
     lines = []
@@ -637,7 +826,9 @@ def find_lyrics(song_dir: Path, meta: dict, provided=None, resync: bool = False)
        4. Whisper transcription of the lead vocal"""
     lines, source = [], ""
     if provided:
-        lines, source = musicai_lyrics(provided), "Music.AI"
+        kind, value = provided if isinstance(provided, tuple) else ("Music.AI", provided)
+        lines = moises_lyrics(value) if kind == "Moises" else musicai_lyrics(value)
+        source = kind if lines else ""
 
     if not lines:
         progress("lyrics", 0.93, "Searching LRCLIB for lyrics")
@@ -721,13 +912,21 @@ def process(args) -> None:
             old.unlink()
 
     provided_lyrics = None
-    if args.engine == "musicai":
+    if args.engine == "moises":
+        if not args.moises_token:
+            raise RuntimeError("Moises: log in first (Sing Studio > ACCOUNT...)")
+        meta["stems"], ml = separate_moises(song_dir, args.moises_token, args.stems == 5,
+                                            f"{artist} - {track}".strip(" -"), meta["duration"])
+        provided_lyrics = ("Moises", ml) if ml else None
+    elif args.engine == "musicai":
         if not (args.musicai_key and args.musicai_workflow):
             raise RuntimeError("Music.AI needs an API key and a workflow ID (Sing Studio > Settings)")
         meta["stems"], provided_lyrics = separate_musicai(song_dir, args.musicai_key, args.musicai_workflow)
+        provided_lyrics = ("Music.AI", provided_lyrics) if provided_lyrics else None
     else:
         meta["stems"] = separate_local(song_dir, five_stems=args.stems == 5)
-    balance_stems(song_dir, meta["stems"])
+    if args.engine == "local":  # cloud engines return stems that already add up to the mix
+        balance_stems(song_dir, meta["stems"])
 
     find_lyrics(song_dir, meta, provided_lyrics)
     (song_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -755,15 +954,34 @@ def main() -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("search"); s.add_argument("query"); s.add_argument("--limit", type=int, default=8)
     pr = sub.add_parser("process"); pr.add_argument("video"); pr.add_argument("--songs", required=True)
-    pr.add_argument("--engine", choices=("local", "musicai"), default="local")
+    pr.add_argument("--engine", choices=("local", "musicai", "moises"), default="local")
+    pr.add_argument("--moises-token", default=os.environ.get("MOISES_TOKEN", ""))  # default: the saved login
     pr.add_argument("--musicai-key", default=os.environ.get("MUSICAI_API_KEY", ""))
     pr.add_argument("--musicai-workflow", default="")
     pr.add_argument("--stems", type=int, choices=(3, 5), default=5)
+    ml = sub.add_parser("moises-login"); ml.add_argument("--email", required=True)
+    ml.add_argument("--password-stdin", action="store_true", help="read the password from stdin (not the command line)")
+    mt = sub.add_parser("moises-check"); mt.add_argument("--token", default="")
     ly = sub.add_parser("lyrics"); ly.add_argument("dir")
     ly.add_argument("--artist"); ly.add_argument("--title")
     ly.add_argument("--resync", action="store_true", help="re-time lyrics to this recording even if LRCLIB has synced ones")
     args = p.parse_args()
+    if hasattr(args, "moises_token") and not args.moises_token and MOISES_TOKEN_FILE.exists():
+        args.moises_token = MOISES_TOKEN_FILE.read_text(encoding="utf-8").strip()
+    if args.cmd == "moises-check" and not args.token and MOISES_TOKEN_FILE.exists():
+        args.token = MOISES_TOKEN_FILE.read_text(encoding="utf-8").strip()
     try:
+        if args.cmd == "moises-login":
+            password = sys.stdin.readline().rstrip("\r\n")
+            emit("token", token=moises_login(args.email, password))
+            return 0
+        if args.cmd == "moises-check":
+            m = Moises(args.token)
+            me = m.gql("query User { user { id name email authProviders subscription { plan isPro isPremium availableCredits } } }").get("user") or {}
+            sub = me.get("subscription") or {}
+            emit("account", email=me.get("email", ""), name=me.get("name", ""), plan=sub.get("plan", ""),
+                 credits=sub.get("availableCredits"), providers=me.get("authProviders"))
+            return 0
         {"search": search, "process": process, "lyrics": relyrics}[args.cmd](*(
             (args.query, args.limit) if args.cmd == "search" else (args,)))
         return 0

@@ -489,8 +489,14 @@ SingStudio::SingStudio (Engine& e, std::function<void()> closeFn) : engine (e), 
 
     engineBox.addItem ("Local GPU (free)", 1);
     engineBox.addItem ("Music.AI cloud", 2);
-    engineBox.setSelectedId (engine.sing.engine == "musicai" ? 2 : 1, juce::dontSendNotification);
-    engineBox.onChange = [this] { engine.sing.engine = engineBox.getSelectedId() == 2 ? "musicai" : "local"; updateEngineBanner(); };
+    engineBox.addItem ("Moises (your account)", 3);
+    engineBox.setSelectedId (engine.sing.engine == "musicai" ? 2 : engine.sing.engine == "moises" ? 3 : 1, juce::dontSendNotification);
+    engineBox.onChange = [this]
+    {
+        const int id = engineBox.getSelectedId();
+        engine.sing.engine = id == 2 ? "musicai" : id == 3 ? "moises" : "local";
+        updateEngineBanner();
+    };
     engineBox.setTooltip ("Which AI separates the song");
     stemsBox.addItem ("5 stems", 5);
     stemsBox.addItem ("3 stems (faster)", 3);
@@ -498,7 +504,8 @@ SingStudio::SingStudio (Engine& e, std::function<void()> closeFn) : engine (e), 
     stemsBox.onChange = [this] { engine.sing.stems = stemsBox.getSelectedId(); };
     stemsBox.setTooltip ("5: lead, backing, drums, bass, instruments.  3: lead, backing, instrumental (local engine)");
 
-    settingsBtn.onClick = [this] { showMusicAiSettings(); };
+    settingsBtn.onClick = [this] { showAccountSettings(); };
+    settingsBtn.setTooltip ("Log in to Moises or set up Music.AI");
     closeBtn.onClick = [this] { if (onClose) onClose(); };
     installBtn.onClick = [this] { installEngine(); };
     cancelBtn.onClick = [this] { processWorker->cancel(); setBusy (false, "Cancelled"); };
@@ -549,6 +556,18 @@ SingStudio::SingStudio (Engine& e, std::function<void()> closeFn) : engine (e), 
 
     searchWorker = std::make_unique<Worker>();
     processWorker = std::make_unique<Worker>();
+    accountWorker = std::make_unique<Worker>();
+    accountWorker->onMessage = [this] (const juce::var& v)
+    {
+        if (v["type"] == "account")
+        {
+            const auto credits = v["credits"].isVoid() ? juce::String() : ", credits: " + v["credits"].toString();
+            statusText = "Moises: logged in as " + v["email"].toString() + " (plan: " + v["plan"].toString() + credits + ")";
+        }
+        else if (v["type"] == "error")
+            statusText = "Moises login problem: " + v["message"].toString();
+        repaint();
+    };
 
     searchWorker->onMessage = [this] (const juce::var& v)
     {
@@ -647,7 +666,9 @@ void SingStudio::updateEngineBanner()
     else if (! hasPython)
         bannerText = "The AI engine isn't installed yet: Python + PyTorch (CUDA 12.6 for your GTX 10-series) + separation models, about 3 GB.";
     else if (engine.sing.engine == "musicai" && (engine.sing.musicaiKey.isEmpty() || engine.sing.musicaiWorkflow.isEmpty()))
-        bannerText = "Music.AI selected: click MUSIC.AI... to paste your API key and workflow ID.";
+        bannerText = "Music.AI selected: click ACCOUNT... to paste your API key and workflow ID.";
+    else if (engine.sing.engine == "moises" && ! getMoisesTokenFile().existsAsFile())
+        bannerText = "Moises selected: click ACCOUNT... to log in to your Moises account.";
     installBtn.setVisible (! hasPython && getWorkerScript().existsAsFile());
     resized();
     repaint();
@@ -776,6 +797,125 @@ void SingStudio::setBusy (bool b, const juce::String& message, double pct)
     statusText = message;
     cancelBtn.setVisible (b);
     repaint();
+}
+
+juce::File SingStudio::getMoisesTokenFile()
+{
+    return Engine::getDataDir().getChildFile ("moises-token.txt");
+}
+
+void SingStudio::showAccountSettings()
+{
+    if (engine.sing.engine == "musicai") { showMusicAiSettings(); return; }
+    if (engine.sing.engine == "moises") { showMoisesLogin(); return; }
+    juce::PopupMenu m;
+    m.addItem (1, "Moises account (log in)...");
+    m.addItem (2, "Music.AI API key...");
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&settingsBtn), [this] (int id)
+    {
+        if (id == 1) showMoisesLogin();
+        if (id == 2) showMusicAiSettings();
+    });
+}
+
+void SingStudio::showMoisesLogin()
+{
+    static const char* snippet =
+        "(async()=>{const d=await new Promise(r=>{const q=indexedDB.open('firebaseLocalStorageDb');q.onsuccess=()=>r(q.result)});"
+        "const g=d.transaction('firebaseLocalStorage').objectStore('firebaseLocalStorage').getAll();"
+        "g.onsuccess=()=>{const u=g.result.find(x=>x.value&&x.value.stsTokenManager);"
+        "copy(u.value.stsTokenManager.refreshToken);console.log('Moises token copied')}})()";
+    auto* aw = new juce::AlertWindow ("Moises account",
+        "BetterVoiceMeeter uploads songs to your Moises account and downloads the stems and lyrics, the way the\n"
+        "studio.moises.ai web app does. This is not an official Moises API: it may stop working if Moises changes\n"
+        "their site, and automated use may go against Moises's terms. Your password is only used to log in and is\n"
+        "never saved.\n\n"
+        "Signed up with Google/Apple? Leave the password empty: open studio.moises.ai, press F12 > Console, paste the\n"
+        "snippet below, press Enter, then paste the copied token into 'Session token'.",
+        juce::MessageBoxIconType::NoIcon, this);
+    aw->addTextEditor ("email", {}, "Email:");
+    aw->addTextEditor ("password", {}, "Password:", true);
+    aw->addTextEditor ("token", {}, "Session token:");
+    aw->addTextEditor ("snippet", snippet, "Console snippet:");
+    aw->addButton ("LOG IN", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    if (getMoisesTokenFile().existsAsFile())
+        aw->addButton ("LOG OUT", 2);
+    aw->addButton ("CANCEL", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    aw->enterModalState (true, juce::ModalCallbackFunction::create ([this, aw] (int result)
+    {
+        std::unique_ptr<juce::AlertWindow> owner (aw);
+        if (result == 2)
+        {
+            getMoisesTokenFile().deleteFile();
+            statusText = "Logged out of Moises.";
+            updateEngineBanner();
+            return;
+        }
+        if (result != 1) return;
+
+        const auto token = aw->getTextEditorContents ("token").trim();
+        const auto email = aw->getTextEditorContents ("email").trim();
+        const auto password = aw->getTextEditorContents ("password");
+        if (token.isNotEmpty())
+        {
+            getMoisesTokenFile().replaceWithText (token);
+            checkMoisesAccount();
+            return;
+        }
+        if (email.isEmpty() || password.isEmpty())
+        {
+            statusText = "Enter your Moises email and password, or a session token.";
+            repaint();
+            return;
+        }
+        statusText = "Logging in to Moises...";
+        repaint();
+        // Log in here (HTTPS to Moises's Firebase auth) so the password never reaches disk or a command line.
+        juce::Component::SafePointer<SingStudio> safe (this);
+        juce::Thread::launch ([safe, email, password]
+        {
+            juce::DynamicObject::Ptr body = new juce::DynamicObject();
+            body->setProperty ("email", email);
+            body->setProperty ("password", password);
+            body->setProperty ("returnSecureToken", true);
+            auto url = juce::URL ("https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=AIzaSyDWcFRZcUnN5EPNNA7jrcuS3HlIvMqtuCs")
+                           .withPOSTData (juce::JSON::toString (juce::var (body.get())));
+            int status = 0;
+            juce::String response;
+            if (auto in = url.createInputStream (juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inPostData)
+                                                     .withExtraHeaders ("Content-Type: application/json\r\n"
+                                                                        "Origin: https://studio.moises.ai\r\n"
+                                                                        "Referer: https://studio.moises.ai/")
+                                                     .withConnectionTimeoutMs (20000)
+                                                     .withStatusCode (&status)))
+                response = in->readEntireStreamAsString();
+            const auto reply = juce::JSON::parse (response);
+            const auto refresh = reply["refreshToken"].toString();
+            auto err = reply["error"]["message"].toString();
+            juce::MessageManager::callAsync ([safe, refresh, err, status]
+            {
+                if (safe == nullptr) return;
+                if (refresh.isNotEmpty())
+                {
+                    getMoisesTokenFile().replaceWithText (refresh);
+                    safe->checkMoisesAccount();
+                    return;
+                }
+                juce::String why = err.isNotEmpty() ? err : "HTTP " + juce::String (status);
+                if (why.contains ("INVALID_LOGIN_CREDENTIALS") || why.contains ("INVALID_PASSWORD") || why.contains ("EMAIL_NOT_FOUND"))
+                    why = "wrong email or password (Google/Apple accounts: use the session token instead)";
+                safe->statusText = "Moises login failed: " + why;
+                safe->repaint();
+            });
+        });
+    }), false);
+}
+
+void SingStudio::checkMoisesAccount()
+{
+    statusText = "Checking your Moises account...";
+    updateEngineBanner();
+    accountWorker->start ({ getPython().getFullPathName(), "-u", getWorkerScript().getFullPathName(), "moises-check" });
 }
 
 void SingStudio::showMusicAiSettings()
