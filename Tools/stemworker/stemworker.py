@@ -376,7 +376,7 @@ def plain_lines(r: dict) -> list[str]:
 
 # ---------------------------------------------------------------- AI sync (Whisper on the lead vocal)
 WHISPER_ALIGN_MODEL = "small"   # enough to time known lyrics
-WHISPER_TRANSCRIBE_MODEL = "medium"  # used when there are no lyrics at all
+WHISPER_TRANSCRIBE_MODEL = "turbo"   # large-v3-turbo: far better on fast / non-English vocals, about as fast as medium
 
 
 def whisper_words(audio: Path, model_name: str, prompt: str = "", language: str | None = None) -> tuple[list[dict], str]:
@@ -569,14 +569,24 @@ def lines_from_words(words: list[dict], max_words: int = 10, gap: float = 0.6) -
     for w in words:
         if cur:
             pause = w["t"] - cur[-1]["end"] > gap
-            punct = cur[-1]["w"][-1:] in ".?!" or (cur[-1]["w"][-1:] == "," and len(cur) >= 5)
+            punct = (cur[-1]["w"][-1:] in ".?!" and len(cur) >= 3) or (cur[-1]["w"][-1:] == "," and len(cur) >= 5)
             new_phrase = w["w"][:1].isupper() and w["w"] not in ("I", "I'm", "I've", "I'll", "I'd") and len(cur) >= 4
             if pause or punct or new_phrase or len(cur) >= max_words:
                 lines.append(cur); cur = []
         cur.append(w)
     if cur:
         lines.append(cur)
-    return [{"t": l[0]["t"], "end": l[-1]["end"], "text": " ".join(x["w"] for x in l), "words": l} for l in lines]
+
+    # Fold 1-2 word fragments ("né?", "yeah!") into a neighbouring line so nothing just flashes by.
+    merged = []
+    for l in lines:
+        if merged and len(l) <= 2 and l[0]["t"] - merged[-1][-1]["end"] < 1.0 and len(merged[-1]) + len(l) <= 13:
+            merged[-1] = merged[-1] + l
+        elif merged and len(merged[-1]) <= 2 and l[0]["t"] - merged[-1][-1]["end"] < 1.0:
+            merged[-1] = merged[-1] + l
+        else:
+            merged.append(l)
+    return [{"t": l[0]["t"], "end": l[-1]["end"], "text": " ".join(x["w"] for x in l), "words": l} for l in merged]
 
 
 def matches_recording(r: dict, duration: float) -> bool:

@@ -106,6 +106,11 @@ public:
     {
         if (style != juce::Slider::LinearVertical)
         {
+            if (style == juce::Slider::LinearBar) // V4 draws only the filled part; give the bar a visible track
+            {
+                g.setColour (s.findColour (juce::Slider::backgroundColourId));
+                g.fillRoundedRectangle ((float) x, (float) y, (float) w, (float) h, 3.0f);
+            }
             LookAndFeel_V4::drawLinearSlider (g, x, y, w, h, pos, 0, 0, style, s);
             return;
         }

@@ -16,6 +16,9 @@ public:
     bool keyPressed (const juce::KeyPress&) override;
     void visibilityChanged() override;
 
+    // Opens a song from the library (used by the --sing command-line option).
+    void openFromLibrary (const juce::String& songId, double seekSeconds, bool play);
+
     // Implementation details (public so the private helper classes in the .cpp can use them).
     struct Item
     {

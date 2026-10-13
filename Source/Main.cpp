@@ -9,13 +9,32 @@ public:
     const juce::String getApplicationVersion() override { return JUCE_APPLICATION_VERSION_STRING; }
     bool moreThanOneInstanceAllowed() override          { return false; }
 
-    void initialise (const juce::String&) override
+    void initialise (const juce::String& commandLine) override
     {
         logger.reset (juce::FileLogger::createDefaultAppLogger ("BetterVoiceMeeter", "BetterVoiceMeeter.log",
                                                                 "BetterVoiceMeeter log"));
         juce::Logger::setCurrentLogger (logger.get());
         engine = std::make_unique<Engine>();
         window = std::make_unique<MainWindow> (*engine);
+        handleCommandLine (commandLine);
+    }
+
+    void anotherInstanceStarted (const juce::String& commandLine) override
+    {
+        if (window != nullptr) window->toFront (true);
+        handleCommandLine (commandLine);
+    }
+
+    // BetterVoiceMeeter.exe --sing <songId> [--seek <seconds>] [--play]
+    void handleCommandLine (const juce::String& commandLine)
+    {
+        auto args = juce::StringArray::fromTokens (commandLine, true);
+        const int i = args.indexOf ("--sing");
+        if (i < 0 || i + 1 >= args.size() || window == nullptr) return;
+        const int s = args.indexOf ("--seek");
+        const double seek = s >= 0 && s + 1 < args.size() ? args[s + 1].getDoubleValue() : 0.0;
+        if (auto* mc = dynamic_cast<MainComponent*> (window->getContentComponent()))
+            mc->openSong (args[i + 1].unquoted(), seek, args.contains ("--play"));
     }
 
     void shutdown() override

@@ -28,6 +28,7 @@ public:
     void closePluginEditor (juce::AudioProcessor*);
     void openPluginManager();
     void toggleSingStudio();
+    void openSong (const juce::String& songId, double seekSeconds, bool play);
 
 private:
     void timerCallback() override;

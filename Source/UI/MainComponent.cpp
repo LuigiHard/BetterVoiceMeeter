@@ -1141,6 +1141,9 @@ void MainComponent::rebuild()
     resized();
     if (reopen >= 0 && engine.strips[(size_t) reopen]->active->on())
         openDetail (reopen);
+    // Freshly added strips sit on top of everything: keep the Sing Studio overlay above them.
+    if (singStudio != nullptr && singStudio->isVisible())
+        singStudio->toFront (false);
 }
 
 void MainComponent::openDetail (int s)
@@ -1247,6 +1250,13 @@ void MainComponent::resized()
         detail->setBounds (getLocalBounds().withTrimmedTop (headerHeight));
     if (singStudio != nullptr)
         singStudio->setBounds (getLocalBounds().withTrimmedTop (headerHeight));
+}
+
+void MainComponent::openSong (const juce::String& id, double seekSeconds, bool play)
+{
+    if (singStudio == nullptr || ! singStudio->isVisible())
+        toggleSingStudio();
+    singStudio->openFromLibrary (id, seekSeconds, play);
 }
 
 void MainComponent::toggleSingStudio()

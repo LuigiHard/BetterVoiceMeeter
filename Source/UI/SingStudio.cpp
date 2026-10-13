@@ -524,7 +524,7 @@ SingStudio::SingStudio (Engine& e, std::function<void()> closeFn) : engine (e), 
     positionSlider.setSliderStyle (juce::Slider::LinearBar);
     positionSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
     positionSlider.setColour (juce::Slider::trackColourId, theme::hw.withAlpha (0.5f));
-    positionSlider.setColour (juce::Slider::backgroundColourId, theme::bg);
+    positionSlider.setColour (juce::Slider::backgroundColourId, theme::panelHi);
     positionSlider.setRange (0.0, 1.0);
     positionSlider.onDragEnd = [this] { engine.songPlayer.seek (positionSlider.getValue()); };
     positionSlider.onValueChange = [this] { if (positionSlider.isMouseButtonDown()) engine.songPlayer.seek (positionSlider.getValue()); };
@@ -745,6 +745,18 @@ void SingStudio::loadSong (const juce::File& dir)
     repaint();
 }
 
+void SingStudio::openFromLibrary (const juce::String& id, double seekSeconds, bool play)
+{
+    const auto dir = Engine::getSongsDir().getChildFile (id);
+    if (! dir.getChildFile ("meta.json").existsAsFile())
+        return;
+    loadSong (dir);
+    engine.songPlayer.setPlaying (play);
+    engine.songPlayer.seek (seekSeconds);
+    if (! play)
+        statusText = "Paused. Press PLAY or Space.";
+}
+
 void SingStudio::rebuildStemRows()
 {
     stemRows.clear();
@@ -881,9 +893,9 @@ void SingStudio::paint (juce::Graphics& g)
 
     g.setColour (theme::text);
     g.setFont (theme::font (17.0f, true));
-    g.drawText ("SING", topBar.withWidth (130).reduced (14, 0), juce::Justification::centredLeft);
+    g.drawText ("SING", topBar.withWidth (170).reduced (14, 0), juce::Justification::centredLeft);
     g.setColour (juce::Colour (0xffff5c8a));
-    g.drawText ("STUDIO", topBar.withWidth (130).reduced (14, 0).withTrimmedLeft (52), juce::Justification::centredLeft);
+    g.drawText ("STUDIO", topBar.withWidth (170).reduced (14, 0).withTrimmedLeft (52), juce::Justification::centredLeft);
 
     if (! bannerArea.isEmpty())
     {
@@ -949,7 +961,7 @@ void SingStudio::resized()
     topBar = r.removeFromTop (48);
     {
         auto t = topBar.reduced (10, 9);
-        t.removeFromLeft (130);
+        t.removeFromLeft (165);
         closeBtn.setBounds (t.removeFromRight (34));
         t.removeFromRight (8);
         settingsBtn.setBounds (t.removeFromRight (100));
