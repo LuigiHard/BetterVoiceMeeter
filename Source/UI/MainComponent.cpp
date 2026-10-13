@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 #include "Widgets.h"
 #include "SingStudio.h"
+#include "AppMixer.h"
 #include <BinaryData.h>
 
 namespace
@@ -1088,8 +1089,12 @@ MainComponent::MainComponent (Engine& e) : engine (e)
     setLookAndFeel (&lnf);
     juce::LookAndFeel::setDefaultLookAndFeel (&lnf);
 
-    for (auto* b : { &singButton, &setupButton, &autoButton, &loadButton, &saveButton })
+    for (auto* b : { &appsButton, &singButton, &setupButton, &autoButton, &loadButton, &saveButton })
         addAndMakeVisible (b);
+    appsButton.setColour (juce::TextButton::buttonColourId, theme::hw.withAlpha (0.22f));
+    appsButton.setColour (juce::TextButton::textColourOffId, theme::text);
+    appsButton.setTooltip ("Volume, mute and level for every app playing audio on this PC");
+    appsButton.onClick = [this] { toggleAppMixer(); };
     singButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xffff5c8a).withAlpha (0.25f));
     singButton.setColour (juce::TextButton::textColourOffId, theme::text);
     singButton.setTooltip ("Separate any song into lead vocal / backing vocals / instruments and sing along with synced lyrics");
@@ -1117,6 +1122,7 @@ MainComponent::~MainComponent()
     engine.onLayoutChanged = nullptr;
     engine.onPluginRemoved = nullptr;
     singStudio.reset();
+    appMixer.reset();
     pluginWindows.clear();
     detail.reset();
     juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
@@ -1145,6 +1151,8 @@ void MainComponent::rebuild()
     // Freshly added strips sit on top of everything: keep the Sing Studio overlay above them.
     if (singStudio != nullptr && singStudio->isVisible())
         singStudio->toFront (false);
+    if (appMixer != nullptr && appMixer->isVisible())
+        appMixer->toFront (false);
 }
 
 void MainComponent::openDetail (int s)
@@ -1204,7 +1212,7 @@ void MainComponent::paint (juce::Graphics& g)
 
     g.setFont (theme::font (12.0f));
     g.setColour (theme::dim);
-    g.drawText (statusText, h.withTrimmedRight (580), juce::Justification::centred);
+    g.drawText (statusText, h.withTrimmedRight (700), juce::Justification::centred);
 
     g.setFont (theme::font (11.0f, true));
     g.setColour (theme::dim);
@@ -1222,7 +1230,7 @@ void MainComponent::resized()
     headerArea = r.removeFromTop (headerHeight);
     {
         auto h = headerArea.reduced (8, 9);
-        for (auto* b : { &saveButton, &loadButton, &autoButton, &setupButton, &singButton })
+        for (auto* b : { &saveButton, &loadButton, &autoButton, &setupButton, &singButton, &appsButton })
         {
             b->setBounds (h.removeFromRight (b == &saveButton || b == &loadButton ? 70 : 120));
             h.removeFromRight (6);
@@ -1254,6 +1262,27 @@ void MainComponent::resized()
         detail->setBounds (getLocalBounds().withTrimmedTop (headerHeight));
     if (singStudio != nullptr)
         singStudio->setBounds (getLocalBounds().withTrimmedTop (headerHeight));
+    if (appMixer != nullptr)
+        appMixer->setBounds (getLocalBounds().withTrimmedTop (headerHeight));
+}
+
+void MainComponent::toggleAppMixer()
+{
+    if (appMixer == nullptr)
+    {
+        appMixer = std::make_unique<AppMixer> ([this] { toggleAppMixer(); });
+        addChildComponent (*appMixer);
+        appMixer->setBounds (getLocalBounds().withTrimmedTop (headerHeight));
+    }
+    const bool show = ! appMixer->isVisible();
+    if (show)
+    {
+        closeDetail();
+        if (singStudio != nullptr && singStudio->isVisible()) toggleSingStudio();
+    }
+    appMixer->setVisible (show);
+    appMixer->toFront (show);
+    appsButton.setButtonText (show ? "MIXER" : "APP MIXER");
 }
 
 void MainComponent::openSong (const juce::String& id, double seekSeconds, bool play)
@@ -1272,7 +1301,11 @@ void MainComponent::toggleSingStudio()
         singStudio->setBounds (getLocalBounds().withTrimmedTop (headerHeight));
     }
     const bool show = ! singStudio->isVisible();
-    if (show) closeDetail();
+    if (show)
+    {
+        closeDetail();
+        if (appMixer != nullptr && appMixer->isVisible()) toggleAppMixer();
+    }
     singStudio->setVisible (show);
     singStudio->toFront (show);
     singButton.setButtonText (show ? "MIXER" : "SING STUDIO");

@@ -41,6 +41,9 @@ Requires a Focusrite interface with the Focusrite USB ASIO driver installed. Opt
     (exported with "Get cookies.txt LOCALLY") under **ACCOUNT… → Import YouTube cookies.txt…**
   - Processed songs are kept in a library (`%APPDATA%\BetterVoiceMeeter\Songs`)
   - Downloading from YouTube is against YouTube's terms; use it for personal practice only
+- **App Mixer** (header → APP MIXER): a strip for every app playing audio on your PC (Discord, Spotify, games,
+  browsers…) with its icon, the device it plays to, a volume fader, a live meter and mute. It drives Windows' own
+  per-app volume, so it adds no delay and stays in sync with the Windows volume mixer.
 - **2 virtual input strips:** capture any Windows recording device through WASAPI
 - **FX returns:** Reverb and stereo ping-pong Delay, each with its own bus routing
 - **Master section**

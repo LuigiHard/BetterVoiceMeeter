@@ -36,6 +36,8 @@ target_sources(BetterVoiceMeeter PRIVATE
     Source/InsertChain.cpp
     Source/SongPlayer.cpp
     Source/UI/SingStudio.cpp
+    Source/AppSessions.cpp
+    Source/UI/AppMixer.cpp
     Source/UI/MainComponent.cpp)
 
 target_include_directories(BetterVoiceMeeter PRIVATE Source)
@@ -84,4 +86,12 @@ juce_generate_juce_header(PluginSmokeTest)
 target_sources(PluginSmokeTest PRIVATE Tests/PluginSmokeTest.cpp Source/InsertChain.cpp)
 target_compile_definitions(PluginSmokeTest PRIVATE JUCE_PLUGINHOST_VST3=1 JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
 target_link_libraries(PluginSmokeTest PRIVATE juce::juce_audio_processors juce::juce_gui_basics
+    PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+
+# Checks per-app volume control against Windows: AppSessionsTest
+juce_add_console_app(AppSessionsTest PRODUCT_NAME "AppSessionsTest")
+juce_generate_juce_header(AppSessionsTest)
+target_sources(AppSessionsTest PRIVATE Tests/AppSessionsTest.cpp Source/AppSessions.cpp)
+target_compile_definitions(AppSessionsTest PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
+target_link_libraries(AppSessionsTest PRIVATE juce::juce_gui_basics
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)

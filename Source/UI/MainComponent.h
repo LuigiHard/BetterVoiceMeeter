@@ -9,6 +9,7 @@ class FxReturnComponent;
 class DetailPanel;
 class PluginWindow;
 class SingStudio;
+class AppMixer;
 
 class MainComponent : public juce::Component, private juce::Timer
 {
@@ -28,6 +29,7 @@ public:
     void closePluginEditor (juce::AudioProcessor*);
     void openPluginManager();
     void toggleSingStudio();
+    void toggleAppMixer();
     void openSong (const juce::String& songId, double seekSeconds, bool play);
 
 private:
@@ -39,7 +41,7 @@ private:
     Engine& engine;
     BvmLookAndFeel lnf;
 
-    juce::TextButton singButton { "SING STUDIO" }, setupButton { "AUDIO SETUP" }, autoButton { "AUTO-ASSIGN" },
+    juce::TextButton appsButton { "APP MIXER" }, singButton { "SING STUDIO" }, setupButton { "AUDIO SETUP" }, autoButton { "AUTO-ASSIGN" },
         loadButton { "LOAD" }, saveButton { "SAVE" };
     juce::String statusText;
 
@@ -53,6 +55,7 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
     juce::OwnedArray<PluginWindow> pluginWindows;
     std::unique_ptr<SingStudio> singStudio; // kept alive while hidden so processing continues
+    std::unique_ptr<AppMixer> appMixer;
 
     juce::Rectangle<int> headerArea, masterArea, fxArea;
     juce::TooltipWindow tooltips { this };

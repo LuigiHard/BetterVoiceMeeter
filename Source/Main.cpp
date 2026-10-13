@@ -29,6 +29,9 @@ public:
     void handleCommandLine (const juce::String& commandLine)
     {
         auto args = juce::StringArray::fromTokens (commandLine, true);
+        if (args.contains ("--apps") && window != nullptr)
+            if (auto* mc = dynamic_cast<MainComponent*> (window->getContentComponent()))
+                mc->toggleAppMixer();
         const int i = args.indexOf ("--sing");
         if (i < 0 || i + 1 >= args.size() || window == nullptr) return;
         const int s = args.indexOf ("--seek");
