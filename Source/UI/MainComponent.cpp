@@ -1306,7 +1306,7 @@ void MainComponent::toggleAppMixer()
 {
     if (appMixer == nullptr)
     {
-        appMixer = std::make_unique<AppMixer> ([this] { toggleAppMixer(); });
+        appMixer = std::make_unique<AppMixer> (engine, [this] { toggleAppMixer(); });
         addChildComponent (*appMixer);
         appMixer->setBounds (getLocalBounds().withTrimmedTop (headerHeight));
     }

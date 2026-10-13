@@ -13,7 +13,7 @@ using Microsoft::WRL::ComPtr;
 
 namespace
 {
-juce::String deviceName (IMMDevice* d)
+juce::String deviceName (IMMDevice* d, bool shortForm = true)
 {
     ComPtr<IPropertyStore> props;
     if (FAILED (d->OpenPropertyStore (STGM_READ, &props))) return {};
@@ -24,7 +24,7 @@ juce::String deviceName (IMMDevice* d)
         name = juce::String (v.pwszVal);
     PropVariantClear (&v);
     // "Alto-falantes (Focusrite USB Audio)" -> "Focusrite USB Audio"
-    if (name.containsChar ('(') && name.endsWithChar (')'))
+    if (shortForm && name.containsChar ('(') && name.endsWithChar (')'))
         name = name.fromFirstOccurrenceOf ("(", false, false).dropLastCharacters (1);
     return name;
 }
@@ -120,7 +120,8 @@ struct AppSessions::Session
     ComPtr<IAudioSessionControl2> control;
     ComPtr<ISimpleAudioVolume> volume;
     ComPtr<IAudioMeterInformation> meter;
-    juce::String key, device;
+    juce::String key, device, deviceFull; // short name for display, full friendly name for matching
+    unsigned long pid = 0;
 };
 
 AppSessions::AppSessions() : juce::Thread ("App sessions") {}
@@ -190,6 +191,7 @@ void AppSessions::rescan()
             || FAILED (mgr->GetSessionEnumerator (&list)))
             continue;
         const auto devName = deviceName (dev.Get());
+        const auto devFull = deviceName (dev.Get(), false);
         int n = 0;
         list->GetCount (&n);
         for (int i = 0; i < n; ++i)
@@ -207,6 +209,8 @@ void AppSessions::rescan()
             {
                 DWORD pid = 0;
                 s->control->GetProcessId (&pid);
+                s->pid = pid;
+                if (pid == GetCurrentProcessId()) continue; // never list BetterVoiceMeeter itself
                 const auto path = processPath (pid);
                 if (path.isEmpty()) continue;
                 s->key = path.toLowerCase();
@@ -229,6 +233,7 @@ void AppSessions::rescan()
             c1.As (&s->volume);
             c1.As (&s->meter);
             s->device = devName;
+            s->deviceFull = devFull;
             sessions.push_back (std::move (s));
         }
     }
@@ -263,6 +268,8 @@ void AppSessions::poll()
             a.devices.clear();
             a.peak = 0;
             a.active = false;
+            a.pids.clear();
+            a.activeDevices.clear();
             if (s->volume)
             {
                 float v = 1.0f;
@@ -278,9 +285,14 @@ void AppSessions::poll()
         auto& a = it->second;
         if (! a.devices.contains (s->device))
             a.devices += (a.devices.isEmpty() ? "" : ", ") + s->device;
+        if (s->pid != 0 && std::find (a.pids.begin(), a.pids.end(), s->pid) == a.pids.end())
+            a.pids.push_back (s->pid);
         AudioSessionState state;
         if (SUCCEEDED (s->control->GetState (&state)) && state == AudioSessionStateActive)
+        {
             a.active = true;
+            a.activeDevices.addIfNotAlreadyThere (s->deviceFull);
+        }
         float pk = 0;
         if (s->meter && SUCCEEDED (s->meter->GetPeakValue (&pk)))
             a.peak = juce::jmax (a.peak, pk);

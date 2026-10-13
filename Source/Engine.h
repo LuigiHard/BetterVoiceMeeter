@@ -6,6 +6,7 @@
 #include "Repair.h"
 #include "InsertChain.h"
 #include "SongPlayer.h"
+#include "AppRouter.h"
 
 // The mixing engine: runs inside the ASIO callback of the Focusrite (or whichever
 // device is selected), so hardware in -> processing -> hardware out costs exactly one
@@ -43,6 +44,9 @@ public:
     void removePlugin (InsertChain&, int slot);
     std::function<void (juce::AudioProcessor*)> onPluginRemoved; // UI closes the editor window
     static juce::File getDataDir();
+
+    // App Mixer modes B/C: apps captured and mixed into the buses.
+    AppRouter appRouter;
 
     // Sing Studio: separated-song player mixed in like an input.
     SongPlayer songPlayer;

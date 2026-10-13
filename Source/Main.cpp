@@ -35,6 +35,8 @@ public:
             engine->uiTheme = args[t + 1].unquoted();
             engine->onThemeChanged();
         }
+        if (const int m = args.indexOf ("--apps-mode"); m >= 0 && m + 1 < args.size() && engine != nullptr)
+            engine->appRouter.setMode ((AppRouter::Mode) juce::jlimit (0, 2, args[m + 1].getIntValue()));
         if (args.contains ("--apps") && window != nullptr)
             if (auto* mc = dynamic_cast<MainComponent*> (window->getContentComponent()))
                 mc->toggleAppMixer();

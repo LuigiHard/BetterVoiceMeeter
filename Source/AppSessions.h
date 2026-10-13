@@ -19,6 +19,8 @@ public:
         bool mute = false;
         bool active = false;   // currently playing
         float peak = 0.0f;     // 0..1
+        std::vector<unsigned long> pids;   // processes with audio sessions
+        juce::StringArray activeDevices;   // devices it is playing on right now (full Windows names)
     };
 
     AppSessions();

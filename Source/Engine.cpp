@@ -122,6 +122,7 @@ Engine::Engine()
 Engine::~Engine()
 {
     saveState();
+    appRouter.shutdown(); // puts routed apps back on their own outputs
     deviceManager.removeAudioCallback (this);
     deviceManager.removeChangeListener (this);
     knownPlugins.removeChangeListener (this);
@@ -338,6 +339,7 @@ void Engine::audioDeviceAboutToStart (juce::AudioIODevice* d)
     for (auto& g : fxGain) g.reset (sr, 0.02);
     songGain.reset (sr, 0.02);
     songPlayer.prepare (sr);
+    appRouter.prepare (sr, d->getCurrentBufferSizeSamples());
 
     for (auto& c : stripInserts) c.prepare (sr, d->getCurrentBufferSizeSamples());
     for (auto& c : busInserts)   c.prepare (sr, d->getCurrentBufferSizeSamples());
@@ -609,6 +611,9 @@ void Engine::audioDeviceIOCallbackWithContext (const float* const* in, int numIn
             }
     }
 
+    // App Mixer routing (Groups / Per-app): captured apps into the buses.
+    appRouter.process (busBuf, kNumBuses, n);
+
     // FX returns.
     {
         auto& rp = *fx[0];
@@ -818,6 +823,9 @@ std::unique_ptr<juce::XmlElement> Engine::createStateXml (bool includeDevice) co
             e->setAttribute ("musicaiKey", sing.musicaiKey);
     }
 
+    if (includeDevice)
+        appRouter.saveTo (*xml->createNewChildElement ("APPROUTER"));
+
     auto* v = xml->createNewChildElement ("VIRTUAL");
     for (int i = 0; i < kNumVirtBuses; ++i)  v->setAttribute ("out" + juce::String (i), outBridgeNames[(size_t) i]);
     for (int i = 0; i < kNumVirtStrips; ++i) v->setAttribute ("in" + juce::String (i), inBridgeNames[(size_t) i]);
@@ -871,6 +879,9 @@ void Engine::restoreStateXml (const juce::XmlElement& xml, bool includeDevice)
         if (e->hasAttribute ("musicaiKey"))
             sing.musicaiKey = e->getStringAttribute ("musicaiKey");
     }
+
+    if (auto* ar = xml.getChildByName ("APPROUTER")) // only in the local settings file, never in presets
+        appRouter.loadFrom (*ar);
 
     if (auto* v = xml.getChildByName ("VIRTUAL"))
     {

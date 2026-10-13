@@ -41,9 +41,16 @@ Requires a Focusrite interface with the Focusrite USB ASIO driver installed. Opt
     (exported with "Get cookies.txt LOCALLY") under **ACCOUNT… → Import YouTube cookies.txt…**
   - Processed songs are kept in a library (`%APPDATA%\BetterVoiceMeeter\Songs`)
   - Downloading from YouTube is against YouTube's terms; use it for personal practice only
-- **App Mixer** (header → APP MIXER): a strip for every app playing audio on your PC (Discord, Spotify, games,
-  browsers…) with its icon, the device it plays to, a volume fader, a live meter and mute. It drives Windows' own
-  per-app volume, so it adds no delay and stays in sync with the Windows volume mixer.
+- **App Mixer** (header → APP MIXER), three modes:
+  - **Volume**: a strip for every app playing audio (Discord, Spotify, games, browsers…) with its icon, device,
+    volume, meter and mute. Drives Windows' own per-app volume: no rerouting, no delay.
+  - **Groups**: apps play through BetterVoiceMeeter in Game / Chat / Music / Browser groups, each with a **you** (A1)
+    and a **stream** (B1) level. Chat and Browser are off the stream by default.
+  - **Per-app**: each app gets its own level, mute and A1–B2 routing.
+  - Groups and Per-app point each routed app at a silent device you choose (e.g. an unused digital output) and capture
+    it from there (~20 ms extra on app audio; your mic stays direct). An app is only mixed once Windows shows it on
+    the silent device, so nothing is heard twice; some apps move on their next sound. Switching back to Volume, or
+    closing the app, restores every app's own output.
 - **2 virtual input strips:** capture any Windows recording device through WASAPI
 - **FX returns:** Reverb and stereo ping-pong Delay, each with its own bus routing
 - **Master section**

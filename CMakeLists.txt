@@ -37,6 +37,9 @@ target_sources(BetterVoiceMeeter PRIVATE
     Source/SongPlayer.cpp
     Source/UI/SingStudio.cpp
     Source/AppSessions.cpp
+    Source/AppRouter.cpp
+    Source/AppOutputRouting.cpp
+    Source/ProcessCapture.cpp
     Source/UI/AppMixer.cpp
     Source/UI/MainComponent.cpp)
 
@@ -102,4 +105,22 @@ juce_generate_juce_header(ProcessCaptureTest)
 target_sources(ProcessCaptureTest PRIVATE Tests/ProcessCaptureTest.cpp Source/ProcessCapture.cpp)
 target_compile_definitions(ProcessCaptureTest PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
 target_link_libraries(ProcessCaptureTest PRIVATE juce::juce_core
+    PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+
+# Per-app output routing check: AppRoutingTest <pid> <sink device name part>
+juce_add_console_app(AppRoutingTest PRODUCT_NAME "AppRoutingTest")
+juce_generate_juce_header(AppRoutingTest)
+target_sources(AppRoutingTest PRIVATE Tests/AppRoutingTest.cpp Source/AppOutputRouting.cpp Source/ProcessCapture.cpp)
+target_compile_definitions(AppRoutingTest PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
+target_link_libraries(AppRoutingTest PRIVATE juce::juce_core
+    PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+
+# End-to-end App Mixer Groups mode check with a test tone app: AppRouterTest <tone.py>
+juce_add_console_app(AppRouterTest PRODUCT_NAME "AppRouterTest")
+juce_generate_juce_header(AppRouterTest)
+target_sources(AppRouterTest PRIVATE Tests/AppRouterTest.cpp Source/AppRouter.cpp Source/AppSessions.cpp
+    Source/ProcessCapture.cpp Source/AppOutputRouting.cpp Source/ExternalBridge.cpp)
+target_include_directories(AppRouterTest PRIVATE Source)
+target_compile_definitions(AppRouterTest PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0 JUCE_WASAPI=1)
+target_link_libraries(AppRouterTest PRIVATE juce::juce_audio_devices juce::juce_gui_basics
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)

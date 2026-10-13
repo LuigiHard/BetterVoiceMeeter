@@ -2,11 +2,16 @@
 #include <JuceHeader.h>
 #include "../AppSessions.h"
 
-// Per-app volume panel: one strip per app playing audio on this PC (Windows per-app volume).
+class Engine;
+
+// App Mixer panel with three modes:
+//   VOLUME   (A) - Windows per-app volume, mute and meters; audio is not rerouted
+//   GROUPS   (C) - apps routed into Game / Chat / Music / Browser groups, each with a "you" and a "stream" level
+//   PER-APP  (B) - each routed app gets its own level and A1..B2 routing
 class AppMixer : public juce::Component, private juce::Timer
 {
 public:
-    explicit AppMixer (std::function<void()> onClose);
+    AppMixer (Engine&, std::function<void()> onClose);
     ~AppMixer() override;
 
     void paint (juce::Graphics&) override;
@@ -14,16 +19,29 @@ public:
     void visibilityChanged() override;
     bool keyPressed (const juce::KeyPress&) override;
 
-    class Strip;
+    class Strip;       // volume mode
+    class GroupCard;   // groups mode
+    class AssignRow;   // groups mode
+    class RouteStrip;  // per-app mode
 
 private:
     void timerCallback() override;
+    void setMode (int newMode);
+    void rebuildContent();
+    void layoutContent();
+    juce::String contentSignature() const;
 
+    Engine& engine;
     AppSessions sessions;
     std::function<void()> onClose;
-    juce::TextButton closeBtn { "X" };
+    juce::TextButton closeBtn { "X" }, volumeBtn { "VOLUME" }, groupsBtn { "GROUPS" }, perAppBtn { "PER-APP" };
+    juce::Label sinkLabel;
+    juce::ComboBox sinkBox;
     juce::Viewport viewport;
     juce::Component holder;
-    juce::OwnedArray<Strip> strips;
-    juce::Rectangle<int> topBar;
+    juce::OwnedArray<juce::Component> items;
+    juce::OwnedArray<juce::Component> rows;
+    juce::String signature;
+    int mode = 0;
+    juce::Rectangle<int> topBar, modeBar, helpArea;
 };
