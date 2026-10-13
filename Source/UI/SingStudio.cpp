@@ -524,6 +524,25 @@ SingStudio::SingStudio (Engine& e, std::function<void()> closeFn) : engine (e), 
     offsetDown.onClick = [this] { lyrics->nudge (-0.25); };
     offsetUp.onClick = [this] { lyrics->nudge (0.25); };
     findLyricsBtn.onClick = [this] { findLyrics(); };
+
+    matchKeyBtn.setClickingTogglesState (true);
+    matchKeyBtn.setToggleState (engine.sing.matchKey, juce::dontSendNotification);
+    matchKeyBtn.setColour (juce::TextButton::buttonOnColourId, theme::busA);
+    matchKeyBtn.setTooltip ("Set Auto-Tune's key and scale on your mic strip to each song's key, with low-latency mode on");
+    matchKeyBtn.onClick = [this] { engine.sing.matchKey = matchKeyBtn.getToggleState(); applySongKey(); };
+    addAndMakeVisible (matchKeyBtn);
+    micBox.setTooltip ("The strip you sing into");
+    micBox.onChange = [this] { engine.sing.micStrip = micBox.getSelectedId() - 1; applySongKey(); };
+    addAndMakeVisible (micBox);
+    addAutoTuneBtn.setTooltip ("Load your installed Auto-Tune into a free plugin slot on the mic strip");
+    addAutoTuneBtn.onClick = [this]
+    {
+        const auto err = engine.addAutoTune (engine.findMicStrip());
+        statusText = err.isNotEmpty() ? err : "Auto-Tune added to your mic strip.";
+        applySongKey();
+    };
+    addChildComponent (addAutoTuneBtn);
+    refreshMicBox();
     findLyricsBtn.setTooltip ("Search the lyrics again (edit artist / title) and sync them to this recording with AI if needed");
     offsetDown.setTooltip ("Lyrics are late? Show them earlier");
     offsetUp.setTooltip ("Lyrics are early? Show them later");
@@ -600,6 +619,16 @@ SingStudio::SingStudio (Engine& e, std::function<void()> closeFn) : engine (e), 
     {
         if (v["type"] == "progress")
             setBusy (true, v["message"].toString(), (double) v["pct"]);
+        else if (v["type"] == "key")
+        {
+            keyJob = false;
+            if (juce::File (v["dir"].toString()) == currentSong)
+            {
+                songKey = v["key"].toString();
+                songScale = v["scale"].toString();
+                applySongKey();
+            }
+        }
         else if (v["type"] == "done" && lyricsJob)
         {
             lyricsJob = false;
@@ -630,6 +659,7 @@ SingStudio::SingStudio (Engine& e, std::function<void()> closeFn) : engine (e), 
     processWorker->onFinished = [this] (int code, const juce::String& tail)
     {
         lyricsJob = false;
+        keyJob = false;
         if (busy) // ended without "done"/"error" (crash)
             setBusy (false, code == -1 ? "Cancelled" : "Processing stopped. " + tail.fromLastOccurrenceOf ("\n", false, false));
     };
@@ -762,6 +792,15 @@ void SingStudio::loadSong (const juce::File& dir)
     nowSubtitle = meta["artist"].toString() + "   |   separated with "
                 + (meta["engine"].toString() == "musicai" ? juce::String ("Music.AI") : juce::String ("local GPU"));
     lyrics->load (dir.getChildFile ("lyrics.json"));
+    songKey = meta["key"].toString();
+    songScale = meta["scale"].toString();
+    if (songKey.isEmpty() && ! busy && getPython().existsAsFile())
+    {
+        keyJob = true;
+        processWorker->start ({ getPython().getFullPathName(), "-u", getWorkerScript().getFullPathName(), "key", dir.getFullPathName() });
+    }
+    refreshMicBox();
+    applySongKey();
     positionSlider.setRange (0.0, juce::jmax (1.0, engine.songPlayer.getLength()));
     rebuildStemRows();
     engine.songPlayer.setPlaying (true);
@@ -779,6 +818,35 @@ void SingStudio::openFromLibrary (const juce::String& id, double seekSeconds, bo
     engine.songPlayer.seek (seekSeconds);
     if (! play)
         statusText = "Paused. Press PLAY or Space.";
+}
+
+void SingStudio::refreshMicBox()
+{
+    micBox.clear (juce::dontSendNotification);
+    for (int s = 0; s < kNumHwStrips; ++s)
+        if (engine.strips[(size_t) s]->active->on())
+            micBox.addItem ("Mic: " + engine.strips[(size_t) s]->label, s + 1);
+    micBox.setSelectedId (engine.findMicStrip() + 1, juce::dontSendNotification);
+}
+
+void SingStudio::applySongKey()
+{
+    const int mic = engine.findMicStrip();
+    const bool hasAutoTune = engine.stripHasAutoTune (mic);
+    addAutoTuneBtn.setVisible (! hasAutoTune);
+    if (songKey.isEmpty())
+        autoTuneText = currentSong.isDirectory() ? "Detecting key..." : juce::String();
+    else if (! hasAutoTune)
+        autoTuneText = "No Auto-Tune on your mic strip";
+    else if (! engine.sing.matchKey)
+        autoTuneText = "Auto-Tune key not changed (matching is off)";
+    else
+    {
+        const auto done = engine.applyKeyToAutoTune (mic, songKey, songScale);
+        autoTuneText = done.isNotEmpty() ? done : "Couldn't set Auto-Tune's key";
+    }
+    resized();
+    repaint();
 }
 
 void SingStudio::rebuildStemRows()
@@ -1077,10 +1145,25 @@ void SingStudio::paint (juce::Graphics& g)
     // Now playing
     g.setColour (theme::text);
     g.setFont (theme::font (22.0f, true));
-    g.drawText (nowTitle.isEmpty() ? juce::String ("No song loaded") : nowTitle, nowArea.removeFromTop (30), juce::Justification::centredLeft, true);
+    auto now = nowArea; // local copy: paint must not change layout
+    g.drawText (nowTitle.isEmpty() ? juce::String ("No song loaded") : nowTitle, now.removeFromTop (30), juce::Justification::centredLeft, true);
     g.setColour (theme::dim);
     g.setFont (theme::font (12.5f));
-    g.drawText (nowSubtitle, nowArea, juce::Justification::topLeft, true);
+    g.drawText (nowSubtitle, now.removeFromTop (20), juce::Justification::topLeft, true);
+
+    if (! keyArea.isEmpty())
+    {
+        auto k = keyArea;
+        g.setColour (theme::dim);
+        g.setFont (theme::font (10.5f, true));
+        g.drawText ("KEY", k.removeFromTop (14), juce::Justification::centredLeft);
+        g.setColour (theme::text);
+        g.setFont (theme::font (18.0f, true));
+        g.drawText (songKey.isEmpty() ? juce::String ("-") : songKey + " " + songScale, k.removeFromTop (22), juce::Justification::centredLeft);
+        g.setColour (theme::dim);
+        g.setFont (theme::font (11.0f));
+        g.drawFittedText (autoTuneText, k, juce::Justification::topLeft, 2, 0.85f);
+    }
 
     // Time
     auto t = transportArea;
@@ -1168,7 +1251,18 @@ void SingStudio::resized()
     r.removeFromLeft (16);
 
     playerArea = r;
-    nowArea = r.removeFromTop (50);
+    nowArea = r.removeFromTop (82);
+    {
+        // Right side of the now-playing area: key + Auto-Tune status, then the controls column.
+        auto right = nowArea.removeFromRight (juce::jmin (480, nowArea.getWidth() / 2));
+        auto controls = right.removeFromRight (190);
+        matchKeyBtn.setBounds (controls.removeFromTop (26).reduced (0, 1));
+        controls.removeFromTop (3);
+        micBox.setBounds (controls.removeFromTop (24));
+        controls.removeFromTop (3);
+        addAutoTuneBtn.setBounds (controls.removeFromTop (24).reduced (0, 1));
+        keyArea = right.reduced (8, 0);
+    }
     transportArea = r.removeFromTop (34);
     {
         auto t = transportArea;

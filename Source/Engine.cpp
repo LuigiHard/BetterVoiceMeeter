@@ -1,4 +1,5 @@
 #include "Engine.h"
+#include "AutoTuneControl.h"
 
 namespace
 {
@@ -737,6 +738,79 @@ juce::File Engine::getSettingsFile()
     return getDataDir().getChildFile ("settings.xml");
 }
 
+using AutoTuneControl::isAutoTune;
+
+int Engine::findMicStrip() const
+{
+    if (juce::isPositiveAndBelow (sing.micStrip, kNumHwStrips) && strips[(size_t) sing.micStrip]->active->on())
+        return sing.micStrip;
+    // First active hardware input that isn't Loopback and isn't pulled all the way down.
+    for (int s = 0; s < kNumHwStrips; ++s)
+    {
+        auto& p = *strips[(size_t) s];
+        if (p.active->on() && ! p.label.containsIgnoreCase ("loopback") && p.fader->get() > -59.0f)
+            return s;
+    }
+    for (int s = 0; s < kNumHwStrips; ++s)
+        if (strips[(size_t) s]->active->on()) return s;
+    return -1;
+}
+
+bool Engine::stripHasAutoTune (int s) const
+{
+    if (! juce::isPositiveAndBelow (s, kNumStrips)) return false;
+    for (int i = 0; i < InsertChain::numSlots; ++i)
+        if (isAutoTune (stripInserts[(size_t) s].get (i))) return true;
+    return false;
+}
+
+juce::String Engine::applyKeyToAutoTune (int s, const juce::String& key, const juce::String& scale)
+{
+    if (! juce::isPositiveAndBelow (s, kNumStrips)) return "No mic strip";
+    juce::StringArray done;
+    for (int i = 0; i < InsertChain::numSlots; ++i)
+    {
+        auto* p = stripInserts[(size_t) s].get (i);
+        if (! isAutoTune (p)) continue;
+        if (AutoTuneControl::applyKey (*p, key, scale)) done.add (p->getName());
+    }
+    if (done.isEmpty()) return {};
+    return done.joinIntoString (", ") + " on " + strips[(size_t) s]->label + " set to " + key + " " + scale;
+}
+
+juce::String Engine::addAutoTune (int s)
+{
+    if (! juce::isPositiveAndBelow (s, kNumStrips)) return "Choose your mic strip first";
+    auto& chain = stripInserts[(size_t) s];
+    int slot = -1;
+    for (int i = 0; i < InsertChain::numSlots && slot < 0; ++i)
+        if (chain.get (i) == nullptr) slot = i;
+    if (slot < 0) return "All plugin slots on this strip are full";
+
+    // Prefer Auto-Tune Pro, then the other Antares editions, from the scanned list or the default VST3 folder.
+    const char* preferred[] = { "Auto-Tune Pro", "Auto-Tune Artist", "Auto-Tune Access", "Auto-Tune EFX" };
+    for (auto* name : preferred)
+        for (auto& d : knownPlugins.getTypes())
+            if (d.name.equalsIgnoreCase (name))
+                return loadPlugin (chain, slot, d);
+    const auto antares = juce::File::getSpecialLocation (juce::File::globalApplicationsDirectory)
+                             .getChildFile ("Common Files/VST3/Antares");
+    for (auto* file : { "Auto-Tune.vst3", "Auto-Tune Artist.vst3", "Auto-Tune Access.vst3", "Auto-Tune EFX.vst3" })
+    {
+        const auto f = antares.getChildFile (file);
+        if (! f.exists()) continue;
+        juce::OwnedArray<juce::PluginDescription> found;
+        for (auto* fmt : formatManager.getFormats())
+            fmt->findAllTypesForFile (found, f.getFullPathName());
+        if (! found.isEmpty())
+        {
+            knownPlugins.addType (*found[0]);
+            return loadPlugin (chain, slot, *found[0]);
+        }
+    }
+    return "Auto-Tune isn't installed (looked in Common Files/VST3/Antares)";
+}
+
 juce::String Engine::loadPlugin (InsertChain& chain, int slot, const juce::PluginDescription& desc)
 {
     juce::String err;
@@ -818,6 +892,8 @@ std::unique_ptr<juce::XmlElement> Engine::createStateXml (bool includeDevice) co
         song.saveTo (*e);
         e->setAttribute ("engine", sing.engine);
         e->setAttribute ("stems", sing.stems);
+        e->setAttribute ("matchKey", sing.matchKey);
+        e->setAttribute ("micStrip", sing.micStrip);
         e->setAttribute ("musicaiWorkflow", sing.musicaiWorkflow);
         if (includeDevice) // the API key stays in the local settings file, never in shared presets
             e->setAttribute ("musicaiKey", sing.musicaiKey);
@@ -875,6 +951,8 @@ void Engine::restoreStateXml (const juce::XmlElement& xml, bool includeDevice)
         song.loadFrom (*e);
         sing.engine = e->getStringAttribute ("engine", sing.engine);
         sing.stems = e->getIntAttribute ("stems", sing.stems);
+        sing.matchKey = e->getBoolAttribute ("matchKey", sing.matchKey);
+        sing.micStrip = e->getIntAttribute ("micStrip", sing.micStrip);
         sing.musicaiWorkflow = e->getStringAttribute ("musicaiWorkflow", sing.musicaiWorkflow);
         if (e->hasAttribute ("musicaiKey"))
             sing.musicaiKey = e->getStringAttribute ("musicaiKey");

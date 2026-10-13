@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(BetterVoiceMeeter VERSION 0.3.0 LANGUAGES C CXX)
+project(BetterVoiceMeeter VERSION 0.4.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,7 +20,7 @@ endif()
 juce_add_gui_app(BetterVoiceMeeter
     PRODUCT_NAME "BetterVoiceMeeter"
     COMPANY_NAME "BetterVoiceMeeter"
-    VERSION 0.3.0
+    VERSION 0.4.0
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Resources/icon-512.png"
     ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/Resources/icon-64.png")
 
@@ -123,4 +123,20 @@ target_sources(AppRouterTest PRIVATE Tests/AppRouterTest.cpp Source/AppRouter.cp
 target_include_directories(AppRouterTest PRIVATE Source)
 target_compile_definitions(AppRouterTest PRIVATE JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0 JUCE_WASAPI=1)
 target_link_libraries(AppRouterTest PRIVATE juce::juce_audio_devices juce::juce_gui_basics
+    PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+
+# Lists a plugin's parameters: PluginParams <path.vst3> [filter]
+juce_add_console_app(PluginParams PRODUCT_NAME "PluginParams")
+juce_generate_juce_header(PluginParams)
+target_sources(PluginParams PRIVATE Tests/PluginParams.cpp)
+target_compile_definitions(PluginParams PRIVATE JUCE_PLUGINHOST_VST3=1 JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
+target_link_libraries(PluginParams PRIVATE juce::juce_audio_processors juce::juce_gui_basics
+    PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+
+# Applies song keys to the installed Auto-Tune: AutoTuneKeyTest <Auto-Tune.vst3>
+juce_add_console_app(AutoTuneKeyTest PRODUCT_NAME "AutoTuneKeyTest")
+juce_generate_juce_header(AutoTuneKeyTest)
+target_sources(AutoTuneKeyTest PRIVATE Tests/AutoTuneKeyTest.cpp)
+target_compile_definitions(AutoTuneKeyTest PRIVATE JUCE_PLUGINHOST_VST3=1 JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
+target_link_libraries(AutoTuneKeyTest PRIVATE juce::juce_audio_processors juce::juce_gui_basics
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)

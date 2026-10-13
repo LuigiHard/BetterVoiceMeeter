@@ -915,6 +915,52 @@ def musicai_lyrics(value) -> list[dict]:
     return [l for l in lines if l["text"]]
 
 
+# --------------------------------------------------------------------------- key detection
+# Names exactly as Auto-Tune shows them, so the app can set the plugin's Key parameter directly.
+KEY_NAMES = ["C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
+# Krumhansl-Kessler key profiles.
+MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
+MINOR_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
+
+
+def estimate_key(song_dir: Path, stems: list[str]) -> dict:
+    """Song key from the harmonic stems (vocals and drums left out: they blur the pitch profile)."""
+    import numpy as np
+    import librosa
+    import soundfile as sf
+
+    harmonic = [s for s in stems if s in ("instrumental", "other", "bass")] or [s for s in stems if s not in ("drums",)]
+    mix = None
+    sr = 44100
+    for s in harmonic:
+        a, sr = sf.read(str(song_dir / f"{s}.wav"), dtype="float32", always_2d=True)
+        mono = a.mean(axis=1)
+        mix = mono if mix is None else mix[: len(mono)] + mono[: len(mix)]
+    if mix is None:
+        return {}
+    y = librosa.resample(mix, orig_sr=sr, target_sr=22050)
+    chroma = librosa.feature.chroma_cqt(y=y, sr=22050, hop_length=4096)
+    profile = chroma.mean(axis=1)
+
+    scores = []
+    for tonic in range(12):
+        for scale, ref in (("major", MAJOR_PROFILE), ("minor", MINOR_PROFILE)):
+            r = np.corrcoef(profile, np.roll(ref, tonic))[0, 1]
+            scores.append((float(r), tonic, scale))
+    scores.sort(reverse=True)
+    best, runner = scores[0], scores[1]
+    return {"key": KEY_NAMES[best[1]], "scale": best[2], "confidence": round(best[0] - runner[0], 3),
+            "alternative": f"{KEY_NAMES[runner[1]]} {runner[2]}"}
+
+
+def detect_key(args) -> None:
+    song_dir = Path(args.dir)
+    meta = json.loads((song_dir / "meta.json").read_text(encoding="utf-8"))
+    meta.update(estimate_key(song_dir, meta.get("stems", [])))
+    (song_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+    emit("key", dir=str(song_dir), key=meta.get("key", ""), scale=meta.get("scale", ""), confidence=meta.get("confidence", 0))
+
+
 # --------------------------------------------------------------------------- main commands
 def process(args) -> None:
     video_id = video_id_from(args.video)
@@ -953,6 +999,11 @@ def process(args) -> None:
         balance_stems(song_dir, meta["stems"])
 
     find_lyrics(song_dir, meta, provided_lyrics)
+    progress("key", 0.98, "Detecting the song's key")
+    try:
+        meta.update(estimate_key(song_dir, meta["stems"]))
+    except Exception:  # noqa: BLE001 - key is optional
+        traceback.print_exc(file=sys.stderr)
     (song_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
     progress("done", 1.0, "Ready")
     emit("done", dir=str(song_dir), meta=meta)
@@ -986,6 +1037,7 @@ def main() -> int:
     ml = sub.add_parser("moises-login"); ml.add_argument("--email", required=True)
     ml.add_argument("--password-stdin", action="store_true", help="read the password from stdin (not the command line)")
     mt = sub.add_parser("moises-check"); mt.add_argument("--token", default="")
+    ky = sub.add_parser("key"); ky.add_argument("dir")
     ly = sub.add_parser("lyrics"); ly.add_argument("dir")
     ly.add_argument("--artist"); ly.add_argument("--title")
     ly.add_argument("--resync", action="store_true", help="re-time lyrics to this recording even if LRCLIB has synced ones")
@@ -1006,7 +1058,7 @@ def main() -> int:
             emit("account", email=me.get("email", ""), name=me.get("name", ""), plan=sub.get("plan", ""),
                  credits=sub.get("availableCredits"), providers=me.get("authProviders"))
             return 0
-        {"search": search, "process": process, "lyrics": relyrics}[args.cmd](*(
+        {"search": search, "process": process, "lyrics": relyrics, "key": detect_key}[args.cmd](*(
             (args.query, args.limit) if args.cmd == "search" else (args,)))
         return 0
     except Exception as e:  # noqa: BLE001 - report every failure to the app

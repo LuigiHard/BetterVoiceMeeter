@@ -39,6 +39,11 @@ Requires a Focusrite interface with the Focusrite USB ASIO driver installed. Opt
     - **Music.AI cloud**: your Music.AI API key + workflow ID (billed per minute by Music.AI)
   - YouTube sometimes requires a login for downloads: log in to YouTube in Firefox, or import a `cookies.txt`
     (exported with "Get cookies.txt LOCALLY") under **ACCOUNT… → Import YouTube cookies.txt…**
+  - **Key detection + Auto-Tune**: each song's key is detected from its instrumental stems. With **AUTO-TUNE: MATCH KEY**
+    on, the Auto-Tune on your mic strip is set to that key and scale when the song loads, with Auto-Tune Pro's
+    low-latency mode (Latency Removal) switched on. **ADD AUTO-TUNE** loads it onto your mic strip. This uses the
+    Antares Auto-Tune (Pro, Artist, Access or EFX) installed on your PC; Auto-Tune is licensed Antares software and
+    isn't included with BetterVoiceMeeter.
   - Processed songs are kept in a library (`%APPDATA%\BetterVoiceMeeter\Songs`)
   - Downloading from YouTube is against YouTube's terms; use it for personal practice only
 - **App Mixer** (header → APP MIXER), three modes:

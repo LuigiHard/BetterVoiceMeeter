@@ -56,8 +56,16 @@ public:
     {
         juce::String engine = "local", musicaiKey, musicaiWorkflow;
         int stems = 5;
+        bool matchKey = true; // set Auto-Tune's key/scale to each karaoke song
+        int micStrip = -1;    // strip the singer uses (-1 = pick automatically)
     } sing;
     static juce::File getSongsDir() { return getDataDir().getChildFile ("Songs"); }
+
+    // Auto-Tune integration (uses the Auto-Tune plugin installed on this PC; never bundled).
+    int findMicStrip() const;
+    juce::String applyKeyToAutoTune (int strip, const juce::String& key, const juce::String& scale); // status text
+    bool stripHasAutoTune (int strip) const;
+    juce::String addAutoTune (int strip);                                                            // error or empty
 
     // Noise repair status for the UI.
     std::array<std::atomic<int>, kNumStrips> denoiseStatus {};

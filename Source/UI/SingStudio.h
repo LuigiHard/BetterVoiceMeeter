@@ -45,6 +45,8 @@ private:
     void checkMoisesAccount();
     static juce::File getMoisesTokenFile();
     void findLyrics();
+    void applySongKey();
+    void refreshMicBox();
     void installEngine();
     void setBusy (bool busy, const juce::String& message = {}, double pct = -1);
     void rebuildStemRows();
@@ -60,7 +62,8 @@ private:
     juce::TextButton searchBtn { "SEARCH" }, resultsTab { "RESULTS" }, libraryTab { "LIBRARY" },
         settingsBtn { "ACCOUNT..." }, closeBtn { "X" }, installBtn { "INSTALL AI ENGINE" }, cancelBtn { "CANCEL" },
         playBtn { "PLAY" }, backBtn { "-5s" }, fwdBtn { "+5s" }, offsetDown { "-" }, offsetUp { "+" },
-        findLyricsBtn { "FIND LYRICS" };
+        findLyricsBtn { "FIND LYRICS" }, matchKeyBtn { "AUTO-TUNE: MATCH KEY" }, addAutoTuneBtn { "ADD AUTO-TUNE" };
+    juce::ComboBox micBox;
     juce::ComboBox engineBox, stemsBox;
     juce::Slider positionSlider;
     std::unique_ptr<ResultList> list;
@@ -73,11 +76,13 @@ private:
     std::vector<Item> results, library;
     bool showingLibrary = false;
     juce::File currentSong;
-    juce::String nowTitle, nowSubtitle, statusText, bannerText;
+    juce::String nowTitle, nowSubtitle, statusText, bannerText, songKey, songScale, autoTuneText;
     double busyPct = -1;
     bool busy = false;
     bool lyricsJob = false; // the running worker job only refreshes lyrics
+    bool keyJob = false;    // the running worker job only detects the key
 
+    juce::Rectangle<int> keyArea;
     juce::Rectangle<int> topBar, listArea, playerArea, nowArea, transportArea, stemsArea, outputArea, lyricsArea,
         statusArea, bannerArea;
 };
