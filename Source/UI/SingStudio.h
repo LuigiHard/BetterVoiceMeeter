@@ -68,6 +68,7 @@ private:
     juce::OwnedArray<StemRow> stemRows;
     std::unique_ptr<juce::Component> outputRow;
     std::unique_ptr<Worker> searchWorker, processWorker, accountWorker;
+    std::unique_ptr<juce::FileChooser> cookieChooser;
 
     std::vector<Item> results, library;
     bool showingLibrary = false;

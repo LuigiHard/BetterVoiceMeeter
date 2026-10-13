@@ -806,15 +806,37 @@ juce::File SingStudio::getMoisesTokenFile()
 
 void SingStudio::showAccountSettings()
 {
-    if (engine.sing.engine == "musicai") { showMusicAiSettings(); return; }
-    if (engine.sing.engine == "moises") { showMoisesLogin(); return; }
+    const auto cookies = Engine::getDataDir().getChildFile ("youtube-cookies.txt");
     juce::PopupMenu m;
-    m.addItem (1, "Moises account (log in)...");
+    m.addItem (1, "Moises account (log in)...", true, getMoisesTokenFile().existsAsFile());
     m.addItem (2, "Music.AI API key...");
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&settingsBtn), [this] (int id)
+    m.addSeparator();
+    m.addItem (3, "Import YouTube cookies.txt...", true, cookies.existsAsFile());
+    if (cookies.existsAsFile())
+        m.addItem (4, "Remove YouTube cookies");
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&settingsBtn), [this, cookies] (int id)
     {
         if (id == 1) showMoisesLogin();
         if (id == 2) showMusicAiSettings();
+        if (id == 4) { cookies.deleteFile(); statusText = "YouTube cookies removed."; repaint(); }
+        if (id != 3) return;
+        // Exported with the "Get cookies.txt LOCALLY" browser extension while logged in to youtube.com.
+        cookieChooser = std::make_unique<juce::FileChooser> ("Choose the youtube.com cookies.txt you exported",
+            juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile ("Downloads"), "*.txt");
+        cookieChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                    [this, cookies] (const juce::FileChooser& fc)
+        {
+            const auto f = fc.getResult();
+            if (! f.existsAsFile()) return;
+            const auto text = f.loadFileAsString();
+            if (! text.contains (".youtube.com"))
+                statusText = "That file has no youtube.com cookies. Export them while on youtube.com.";
+            else if (f.copyFileTo (cookies))
+                statusText = "YouTube cookies imported. Downloads will use your YouTube login.";
+            else
+                statusText = "Could not copy the cookies file.";
+            repaint();
+        });
     });
 }
 
