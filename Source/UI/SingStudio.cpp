@@ -602,7 +602,10 @@ SingStudio::SingStudio (Engine& e, std::function<void()> closeFn) : engine (e), 
         else if (v["type"] == "error")
         {
             lyricsJob = false;
-            setBusy (false, "Error: " + v["message"].toString());
+            const auto msg = v["message"].toString();
+            setBusy (false, "Error: " + msg.upToFirstOccurrenceOf ("\n", false, false));
+            if (msg.containsChar ('\n')) // instructions (e.g. YouTube login): show them in full
+                juce::NativeMessageBox::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Sing Studio", msg, this);
         }
     };
     processWorker->onFinished = [this] (int code, const juce::String& tail)

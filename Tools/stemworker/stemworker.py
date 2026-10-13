@@ -100,6 +100,29 @@ def video_id_from(arg: str) -> str:
     return m.group(1) if m else arg
 
 
+COOKIES_FILE = Path(os.environ.get("APPDATA", HERE)) / "BetterVoiceMeeter" / "youtube-cookies.txt"
+
+
+def youtube_attempts() -> list[tuple[str, dict]]:
+    """Ways to reach YouTube, tried in order until one works. YouTube sometimes demands a signed-in
+    session ("confirm you're not a bot"); then we borrow one from a cookies file or a browser."""
+    base = {"js_runtimes": {"deno": {"path": None}, "node": {"path": None}}}  # solves YouTube's JS challenge
+    attempts = [("no login", dict(base))]
+    if COOKIES_FILE.exists():
+        attempts.append((f"cookies file {COOKIES_FILE.name}", {**base, "cookiefile": str(COOKIES_FILE)}))
+    for browser in ("firefox", "chrome", "edge", "brave"):
+        attempts.append((f"{browser} login", {**base, "cookiesfrombrowser": (browser, None, None, None)}))
+    return attempts
+
+
+BOT_CHECK_HELP = (
+    "YouTube asked to confirm you're not a bot, so downloads need your YouTube login. Either:\n"
+    "  1) Log in to YouTube once in Firefox (works automatically after that), or\n"
+    "  2) Export your youtube.com cookies with the browser extension 'Get cookies.txt LOCALLY' and save them as\n"
+    f"     {COOKIES_FILE}\n"
+    "(Chrome/Edge logins can't be read by other apps anymore.)")
+
+
 def download(video_id: str, song_dir: Path) -> dict:
     import yt_dlp
 
@@ -121,8 +144,21 @@ def download(video_id: str, song_dir: Path) -> dict:
         "progress_hooks": [hook],
         "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "wav"}],
     }
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=True)
+    errors = []
+    info = None
+    for label, extra in youtube_attempts():
+        try:
+            with yt_dlp.YoutubeDL({**opts, **extra}) as ydl:
+                info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=True)
+            break
+        except Exception as e:  # noqa: BLE001 - try the next way in
+            errors.append(f"{label}: {str(e).splitlines()[0][:160]}")
+            progress("download", 0.02, f"YouTube refused ({label}), trying another way...")
+    if info is None:
+        print("\n".join(errors), file=sys.stderr)
+        if any("not a bot" in e or "Sign in" in e for e in errors):
+            raise RuntimeError(BOT_CHECK_HELP)
+        raise RuntimeError("YouTube download failed: " + errors[0])
     # Normalise to 44.1 kHz stereo, the rate the separation models output.
     to_wav(song_dir / "download.wav", song_dir / "source.wav")
     (song_dir / "download.wav").unlink(missing_ok=True)
